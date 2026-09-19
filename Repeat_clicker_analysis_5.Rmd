@@ -1,0 +1,3125 @@
+---
+title: "Anonymous"
+author: "Anonymous"
+date: "2025-06-17"
+output: html_document
+---
+
+ 
+```{r}
+
+ 
+## -------------------------------------------------
+## 0) Setup
+## -------------------------------------------------
+set.seed(123)
+
+
+knitr::opts_chunk$set(
+  warning = FALSE,
+  message = FALSE
+)
+
+packages <- c(
+  "readxl", "dplyr", "readr", "lavaan", "semTools", "lubridate",
+  "stringr", "tidyr", "Hmisc", "ggplot2", "moments", "patchwork",
+  "mice", "lmtest", "car", "tools", "lme4", "miceadds", "DescTools"
+)
+
+installed <- packages %in% rownames(installed.packages())
+if (any(!installed)) install.packages(packages[!installed])
+lapply(packages, library, character.only = TRUE)
+
+
+## -------------------------------------------------
+## 1) Read raw data
+## -------------------------------------------------
+
+df_raw <- read_excel("study_data_merged.xlsx")
+
+
+num_cols <- c(
+  "Optimism_bias_self_1", "Optimism_bias_self_2",
+  "Optimism_bias_other_1", "Optimism_bias_other_2",
+  paste0("self_efficacy_", 1:4),
+  paste0("risk_perception_", 1:6),
+  paste0("locus_of_control_", 1:12),
+  paste0("Acceptance _", 1:8),
+  paste0("negative_emotions_", 1:13),
+  paste0("Training intention _", 1:5),
+  paste0("Q21_", 1:3),
+  paste0("Q22_", 1:2)
+)
+
+
+cat("Raw duplicates (by anonymisedEmail): ",
+    sum(duplicated(df_raw$anonymisedEmail)), "\n")
+
+
+
+
+## -------------------------------------------------
+## 2) Parse numerics + reverse code
+## -------------------------------------------------
+
+rev_items <- paste0("locus_of_control_", c(1,2,6,7,8,9,10,11))
+
+df_clean <- df_raw %>%
+  mutate(
+    across(all_of(num_cols), ~ parse_number(as.character(.))),
+    across(all_of(rev_items), ~ 8 - .),
+
+    # Years at the organisation, collected in ordered five-year groups. The
+    # dataset carries the band labels directly; the stopifnot below asserts
+    # that every label is one of the expected bands.
+    years_org_group = trimws(as.character(`[anonymized institution]_years_groups`)),
+    years_org = factor(
+      years_org_group,
+      levels = c("1-5", "6-10", "11-15", "16-20", "21-25", "26-30", "31+"),
+      ordered = TRUE
+    ),
+    years_org_num = as.numeric(years_org)
+  )
+
+## Guard: an unrecognised tenure band must never pass silently as NA. If this
+## fires, the band labels in the input are not the expected "1-5" ... "31+".
+stopifnot(!any(is.na(df_clean$years_org) &
+                 !is.na(df_clean$`[anonymized institution]_years_groups`)))
+
+
+## -------------------------------------------------
+## 3) Check: t-Test for duplicated values --> different? 
+##    Remove duplicates
+##    Rule: take first occurrence per anonymisedEmail
+## -------------------------------------------------
+dup_emails <- df_clean %>%
+  count(anonymisedEmail) %>%
+  filter(n > 1) %>%
+  pull(anonymisedEmail)
+
+if (length(dup_emails) > 0) {
+  
+  df_dup <- df_clean %>%
+    filter(anonymisedEmail %in% dup_emails) %>%
+    mutate(
+      optimism_bias =
+        rowMeans(across(c(Optimism_bias_other_1, Optimism_bias_other_2)),
+                 na.rm = TRUE) -
+        rowMeans(across(c(Optimism_bias_self_1,  Optimism_bias_self_2)),
+                 na.rm = TRUE),
+      self_efficacy      = rowMeans(across(self_efficacy_1:self_efficacy_4), na.rm = TRUE),
+      risk_perception    = rowMeans(across(c(risk_perception_1:risk_perception_4,
+                                             risk_perception_6)),
+                                    na.rm = TRUE),
+      locus_of_control   = rowMeans(across(locus_of_control_1:locus_of_control_12),
+                                    na.rm = TRUE),
+      acceptance         = rowMeans(across(c(`Acceptance _1`:`Acceptance _6`,
+                                             `Acceptance _8`)),
+                                    na.rm = TRUE),
+      negative_emotions  = rowMeans(across(c(negative_emotions_1:negative_emotions_10,
+                                             negative_emotions_12:negative_emotions_13)),
+                                    na.rm = TRUE),
+      training_intention = rowMeans(across(`Training intention _1`:`Training intention _5`),
+                                    na.rm = TRUE)
+    ) %>%
+    group_by(anonymisedEmail) %>%
+    mutate(entry = row_number()) %>%
+    ungroup()
+  
+  df_wide <- df_dup %>%
+    dplyr::select(anonymisedEmail, entry,
+           optimism_bias, self_efficacy, risk_perception,
+           locus_of_control, acceptance, negative_emotions,
+           training_intention) %>%
+    pivot_wider(
+      names_from  = entry,
+      values_from = c(optimism_bias, self_efficacy, risk_perception,
+                      locus_of_control, acceptance, negative_emotions,
+                      training_intention),
+      names_sep = "_entry"
+    )
+  
+  test_vars <- c("optimism_bias", "self_efficacy", "risk_perception",
+                 "locus_of_control", "acceptance", "negative_emotions",
+                 "training_intention")
+  
+  paired_results <- lapply(test_vars, function(var) {
+    v1 <- paste0(var, "_entry1")
+    v2 <- paste0(var, "_entry2")
+    t_res <- t.test(df_wide[[v1]], df_wide[[v2]], paired = TRUE)
+    data.frame(
+      variable  = var,
+      t_stat    = unname(t_res$statistic),
+      df        = unname(t_res$parameter),
+      p_value   = unname(t_res$p.value),
+      mean_diff = mean(df_wide[[v1]] - df_wide[[v2]], na.rm = TRUE)
+    )
+  })
+  
+  paired_results_df <- bind_rows(paired_results)
+  cat("\nPaired t-tests duplicate entries (pre-dedupe):\n")
+  print(paired_results_df)
+}
+
+
+## -------------------------------------------------
+## 4) Remove duplicates (exluding the second value)
+## -------------------------------------------------
+df_dedup <- df_clean %>%
+  group_by(anonymisedEmail) %>%
+  slice(1) %>%
+  ungroup()
+
+cat("Unique participants after dedupe: ", nrow(df_dedup), "\n")
+
+
+## -------------------------------------------------
+## 5) Attention checks
+##    We'll compute all variants once.
+## -------------------------------------------------
+
+# Helper: number of passed checks per row
+df_checks <- df_dedup %>%
+  mutate(
+    pass1 = risk_perception_5    == 1,
+    pass2 = `Acceptance _7`      == 3,
+    pass3 = negative_emotions_11 == 1,
+    n_pass = rowSums(cbind(pass1, pass2, pass3), na.rm = TRUE)
+  )
+
+n_total <- nrow(df_checks)
+
+### 4a) strict = all 3 correct
+df_strict <- df_checks %>%
+  filter(
+    risk_perception_5    == 1,
+    `Acceptance _7`      == 3,
+    negative_emotions_11 == 1
+  ) %>%
+  dplyr::select(-pass1, -pass2, -pass3, -n_pass)
+
+cat("\n[Strict check]\n")
+cat(" Kept:        ", nrow(df_strict), "\n")
+cat(" Excluded:    ", n_total - nrow(df_strict), "\n")
+cat(" Excluded %:  ",
+    round(100 * (n_total - nrow(df_strict)) / n_total, 1), "%\n", sep="")
+
+### 4b) max 2 fails = at least 1 correct  (n_pass >= 1)
+df_max2fail <- df_checks %>%
+  filter(n_pass >= 1) %>%
+  dplyr::select(-pass1, -pass2, -pass3, -n_pass)
+
+cat("\n[Max 2 fails]\n")
+cat(" Kept (>=1 ok): ", nrow(df_max2fail), "\n")
+cat(" Excluded:      ", n_total - nrow(df_max2fail), "\n")
+
+### 4c) min 2 correct = n_pass >= 2
+df_min2pass <- df_checks %>%
+  filter(n_pass >= 2) %>%
+  dplyr::select(-pass1, -pass2, -pass3, -n_pass)
+
+cat("\n[Min 2 correct]\n")
+cat(" Kept (>=2 ok): ", nrow(df_min2pass), "\n")
+cat(" Excluded:      ", n_total - nrow(df_min2pass), "\n\n")
+
+
+## -------------------------------------------------
+## Decision for dataset to continue with:
+## -------------------------------------------------
+
+df_analysis <- df_strict
+
+
+##-------------------------------------------------
+##Exclusion of those participants who a. did not read or deleted the email
+##-------------------------------------------------
+
+
+
+to_valid <- function(x) {
+  x <- trimws(as.character(x))
+  ifelse(is.na(x) | x == "" | x == "--", 0L, 1L)
+}
+
+df_analysis_filt <- df_analysis %>%
+  mutate(
+    read_sim1    = to_valid(sim1_MessageRead_TimeStamp),
+    read_sim2    = to_valid(sim2_MessageRead_TimeStamp),
+    del_sim1     = to_valid(sim1_MessageDeleted_TimeStamp),
+    del_sim2     = to_valid(sim2_MessageDeleted_TimeStamp),
+    processed_sim1 = ifelse(read_sim1 == 1L | del_sim1 == 1L, 1L, 0L),
+    processed_sim2 = ifelse(read_sim2 == 1L | del_sim2 == 1L, 1L, 0L)
+  ) %>%
+  filter(processed_sim1 == 1L, processed_sim2 == 1L)
+
+
+
+cat("N vorher:", nrow(df_analysis), "\n")
+cat("N nach Read-Filter:", nrow(df_analysis_filt), "\n")
+
+
+
+
+
+##-------------------------------------------------
+## 6) Straightlining
+##-------------------------------------------------
+
+ 
+items_all <- c(
+  "Optimism_bias_self_1","Optimism_bias_self_2",
+  "Optimism_bias_other_1","Optimism_bias_other_2",
+  paste0("self_efficacy_", 1:4),
+  paste0("risk_perception_", 1:6),
+  paste0("locus_of_control_", 1:12),          
+  paste0("Acceptance _", 1:8),
+  paste0("negative_emotions_", 1:13),
+  paste0("Training intention _", 1:5),
+  paste0("Q21_", 1:3), paste0("Q22_", 1:2)
+)
+
+ 
+.longstring_vec <- function(x) {
+  if (all(is.na(x))) return(NA_integer_)
+  s <- split(x, cumsum(is.na(x)))                      
+  runs <- unlist(lapply(s, function(v) if (length(v)) rle(v)$lengths else integer()))
+  if (length(runs)) max(runs) else 0L
+}
+.n_runs_ge_x <- function(x, X = 12) {
+  if (all(is.na(x))) return(NA_integer_)
+  s <- split(x, cumsum(is.na(x)))
+  runs <- unlist(lapply(s, function(v) if (length(v)) rle(v)$lengths else integer()))
+  sum(runs >= X)
+}
+.prop_same_adj <- function(x) {
+  v <- x[!is.na(x)]
+  if (length(v) < 2) return(NA_real_)
+  mean(v[-1] == v[-length(v)])
+}
+.irv <- function(x) {
+  v <- x[!is.na(x)]
+  if (length(v) < 2) return(NA_real_)
+  stats::sd(v)
+}
+
+ 
+ 
+scale01 <- function(v) {
+  if (all(is.na(v))) return(v)
+  vnum <- as.numeric(v)
+  vmin <- 1
+  vmax <- max(vnum, na.rm = TRUE)
+  out <- (vnum - vmin) / (vmax - vmin)
+  round(out, 2)                                     
+}
+
+df_seq <- df_analysis_filt %>%
+  dplyr::select(anonymisedEmail, all_of(items_all)) %>%
+  mutate(across(all_of(items_all), scale01))
+
+
+ 
+threshold_X <- 12
+
+straight_all <- df_seq |>
+  dplyr::rowwise() |>
+  dplyr::mutate(
+    longstring_all    = .longstring_vec(dplyr::c_across(dplyr::all_of(items_all))),
+    n_runs_ge_12_all  = .n_runs_ge_x(dplyr::c_across(dplyr::all_of(items_all)), X = threshold_X),
+    prop_same_adj_all = .prop_same_adj(dplyr::c_across(dplyr::all_of(items_all))),
+    irv_all           = .irv(dplyr::c_across(dplyr::all_of(items_all))),
+    flag_ge_12_all    = longstring_all >= threshold_X
+  ) |>
+  dplyr::ungroup() |>
+  dplyr::select(anonymisedEmail, longstring_all, n_runs_ge_12_all,
+                prop_same_adj_all, irv_all, flag_ge_12_all)
+
+ 
+straight_all |>
+  dplyr::arrange(dplyr::desc(longstring_all)) |>
+  print(n = 20)
+
+ 
+if (!requireNamespace("ggplot2", quietly = TRUE)) install.packages("ggplot2")
+
+
+ 
+ggplot(straight_all, aes(x = longstring_all)) +
+  geom_histogram(binwidth = 1, color = "black", fill = "steelblue") +
+  geom_text(
+    stat = "count",
+    aes(label = ..count..),
+    vjust = -0.3,
+    size = 3.5
+  ) +
+  labs(
+    title = "Distribution of LongString-Werte across all items",
+    x = "Longest series with same answer",
+    y = "Frequency (Number of persons"
+  ) +
+  theme_minimal(base_size = 13)
+
+ 
+straight_all %>%
+  filter(longstring_all >= 12) %>%
+  dplyr::select(anonymisedEmail, longstring_all, irv_all) %>%
+  arrange(desc(longstring_all))
+
+## -------------------------------------------------
+## Alternative dataset without extreme straightliners (cutoff ≥ 18)
+## -------------------------------------------------
+
+
+straightliner_ids <- straight_all %>%
+  filter(longstring_all >= 18) %>%
+  pull(anonymisedEmail)
+
+cat("\nAnzahl Straightliner (>=18 gleiche Antworten in Folge): ",
+    length(straightliner_ids), "\n")
+
+
+df_analysis_filt_noSL <- df_analysis_filt %>%
+  filter(!anonymisedEmail %in% straightliner_ids)
+
+cat("N Original (df_analysis_filt): ", nrow(df_analysis_filt), "\n")
+cat("N ohne Straightliner    : ", nrow(df_analysis_filt_noSL), "\n")
+
+
+
+
+## -------------------------------------------------
+## 7) Create composite scores on analysis sample
+## -------------------------------------------------
+
+df_analysis_filt <- df_analysis_filt %>%
+  mutate(
+    optimism_bias =
+      rowMeans(across(c(Optimism_bias_other_1, Optimism_bias_other_2)),
+               na.rm = TRUE) -
+      rowMeans(across(c(Optimism_bias_self_1,  Optimism_bias_self_2)),
+               na.rm = TRUE),
+
+    self_efficacy      = rowMeans(across(self_efficacy_1:self_efficacy_4), na.rm = TRUE),
+    risk_perception    = rowMeans(across(c(risk_perception_1:risk_perception_4,
+                                           risk_perception_6)),
+                                  na.rm = TRUE),
+    locus_of_control   = rowMeans(across(locus_of_control_1:locus_of_control_12),
+                                  na.rm = TRUE),
+    acceptance         = rowMeans(across(c(`Acceptance _1`:`Acceptance _6`,
+                                           `Acceptance _8`)),
+                                  na.rm = TRUE),
+    negative_emotions  = rowMeans(across(c(negative_emotions_1:negative_emotions_10,
+                                           negative_emotions_12:negative_emotions_13)),
+                                  na.rm = TRUE),
+    training_intention = rowMeans(across(`Training intention _1`:`Training intention _5`),
+                                  na.rm = TRUE),
+    per_orga_security  = rowMeans(across(Q21_1:Q21_3), na.rm = TRUE),
+    feeling_attacked   = rowMeans(across(Q22_1:Q22_2), na.rm = TRUE)
+  )
+
+unique(df_analysis_filt$JobRole_std)
+
+
+## -------------------------------------------------
+## 8) Simulation behaviour indicators
+##    clicked / compromised / reported across all sims
+## -------------------------------------------------
+
+to_indicator <- function(x) {
+  x <- trimws(as.character(x))
+  dplyr::case_when(
+    is.na(x) | x == "" ~ NA_integer_,
+    x == "--"          ~ 0L,
+    TRUE               ~ 1L
+  )
+}
+
+df_analysis_filt <- df_analysis_filt %>%
+  mutate(
+    # clicked
+    clicked_sim0  = to_indicator(`sim0_Viewed Landing Page_Time_c1_2023-03-29`),
+    clicked_sim05 = to_indicator(`sim0.5_Viewed Landing Page_Time_c2_2024-07-22`),
+    clicked_sim1  = to_indicator(sim1_EmailLinkClicked_TimeStamp),
+    clicked_sim2  = to_indicator(sim2_EmailLinkClicked_TimeStamp),
+    clicked       = clicked_sim0 + clicked_sim05 + clicked_sim1 + clicked_sim2,
+
+    # compromised
+    compromised_sim0  = to_indicator(`sim0_Data Entered_Time_c1_2023-03-29`),
+    compromised_sim05 = to_indicator(`sim0.5_Data Entered_Time_c2_2024-07-22`),
+    compromised_sim1  = to_indicator(sim1_CredSupplied_TimeStamp_Compromised),
+    compromised_sim2  = to_indicator(sim2_CredSupplied_TimeStamp_Compromised),
+    compromised       = compromised_sim0 + compromised_sim05 +
+                        compromised_sim1 + compromised_sim2,
+
+    # reported
+    reported_sim1 = to_indicator(sim1_Phishing_Reported_On),
+    reported_sim2 = to_indicator(sim2_Phishing_Reported_On),
+    reported      = reported_sim1 + reported_sim2
+  )
+
+
+lapply(
+  c("clicked_sim0","clicked_sim05","clicked_sim1","clicked_sim2",
+    "compromised_sim0","compromised_sim05","compromised_sim1","compromised_sim2",
+    "reported_sim1","reported_sim2"),
+  \(v) { cat("\n", v, "\n"); print(table(df_analysis_filt[[v]], useNA="ifany")) }
+)
+
+
+
+
+
+## -------------------------------------------------
+## 9) Missingness check for key predictors
+## -------------------------------------------------
+
+key_preds <- c("optimism_bias", "risk_perception", "negative_emotions",
+               "acceptance", "self_efficacy", "locus_of_control")
+
+n_complete <- sum( complete.cases(df_analysis_filt[ key_preds ]) )
+cat("\nComplete cases for predictors: ", n_complete, "\n")
+
+df_analysis_filt %>% summarise(n_missing_locus = sum(is.na(locus_of_control))) %>% print()
+df_analysis_filt %>% summarise(n_missing_opt   = sum(is.na(optimism_bias)))  %>% print()
+df_analysis_filt %>% summarise(n_missing_rp1   = sum(is.na(risk_perception_1))) %>% print()
+df_analysis_filt %>% summarise(n_missing_se    = sum(is.na(self_efficacy)))  %>% print()
+df_analysis_filt %>% summarise(n_missing_ne    = sum(is.na(negative_emotions))) %>% print()
+df_analysis_filt %>% summarise(n_missing_acc   = sum(is.na(acceptance))) %>% print()
+
+
+## -------------------------------------------------
+## 10) Correlations between composites + behaviour
+## -------------------------------------------------
+
+corr_vars <- df_analysis_filt %>%
+  dplyr::select(
+    optimism_bias, self_efficacy, risk_perception, locus_of_control,
+    acceptance, negative_emotions, training_intention,
+    per_orga_security, feeling_attacked
+  )
+
+corr_matrix <- cor(corr_vars, use = "pairwise.complete.obs")
+
+
+res <- rcorr(as.matrix(corr_vars), type = "pearson")
+Rmat <- res$r
+Pmat <- res$P
+
+stars <- symnum(
+  Pmat, corr = FALSE, na = FALSE,
+  cutpoints = c(0, 0.001, 0.01, 0.05, 1),
+  symbols   = c("***", "**", "*", " ")
+)
+
+Rstars <- matrix(
+  paste0(formatC(Rmat, format = "f", digits = 2), stars),
+  ncol = ncol(Rmat),
+  dimnames = dimnames(Rmat)
+)
+
+cat("\nCorrelation matrix with sig stars:\n")
+print(Rstars)
+
+
+## -------------------------------------------------
+## 11) Descriptives for phishing outcomes
+## -------------------------------------------------
+
+cat("\nClicked summary:\n")
+df_analysis_filt %>%
+  count(clicked) %>%
+  mutate(pct = round(100 * n / sum(n), 1)) %>%
+  print()
+
+cat("\nCompromised summary:\n")
+df_analysis_filt %>%
+  count(compromised) %>%
+  mutate(pct = round(100 * n / sum(n), 1)) %>%
+  print()
+
+cat("\nReported summary:\n")
+df_analysis_filt %>%
+  count(reported) %>%
+  mutate(pct = round(100 * n / sum(n), 1)) %>%
+  print()
+
+
+##--------------------------------------------------
+## 12) Summary per simulation (percentages)
+##--------------------------------------------------
+
+sim_summary <- tibble(
+  sim = c("sim0", "sim0.5", "sim1", "sim2"),
+  clicked_rate = c(
+    mean(df_analysis_filt$clicked_sim0,  na.rm = TRUE),
+    mean(df_analysis_filt$clicked_sim05, na.rm = TRUE),
+    mean(df_analysis_filt$clicked_sim1,  na.rm = TRUE),
+    mean(df_analysis_filt$clicked_sim2,  na.rm = TRUE)
+  ) * 100,
+  compromised_rate = c(
+    mean(df_analysis_filt$compromised_sim0,  na.rm = TRUE),
+    mean(df_analysis_filt$compromised_sim05, na.rm = TRUE),
+    mean(df_analysis_filt$compromised_sim1,  na.rm = TRUE),
+    mean(df_analysis_filt$compromised_sim2,  na.rm = TRUE)
+  ) * 100,
+  reported_rate = c(
+    NA,  # sim0 hatte kein Reporting
+    NA,  # sim0.5 auch nicht
+    mean(df_analysis_filt$reported_sim1, na.rm = TRUE) * 100,
+    mean(df_analysis_filt$reported_sim2, na.rm = TRUE) * 100
+  )
+)
+print(sim_summary)
+
+
+##----------------------------------
+## 13) Age and Job role stats
+##----------------------------------
+
+
+names(df_analysis_filt)
+
+## Midpoints of the age bands; the top band is labelled "65+". A level that
+## matched nothing would come back from dplyr::recode as NA and be silently
+## dropped by mean(..., na.rm = TRUE), and warnings are suppressed by the chunk
+## options, so the guard below checks for it explicitly.
+df_analysis_filt$age_mean <- dplyr::recode(df_analysis_filt$Age,
+  "18-24" = 21,
+  "25-34" = 29.5,
+  "35-44" = 39.5,
+  "45-54" = 49.5,
+  "55-64" = 59.5,
+  "65+"   = 69.5   # open-ended band; 69.5 assumes an effective 65-74 span
+)
+
+## Guard: an unmatched level must never pass silently.
+stopifnot(!any(is.na(df_analysis_filt$age_mean) & !is.na(df_analysis_filt$Age)))
+
+
+mean(df_analysis_filt$age_mean, na.rm = TRUE)
+
+sd(df_analysis_filt$age_mean, na.rm = TRUE)
+
+df_analysis_filt <- df_analysis_filt %>%
+  mutate(
+    JobRole_bin = factor(
+      ifelse(JobRole_std == "academic",
+             "academic",
+             "non-academic"),
+      levels = c("academic", "non-academic")
+    )
+  )
+
+
+
+
+table(df_analysis_filt$JobRole_bin)
+
+levels(df_analysis_filt$JobRole_bin)
+
+
+prop.table(table(df_analysis_filt$JobRole_std))
+
+
+##-----------------------------------
+## 14) Reporting
+##-----------------------------------
+df_analysis_filt <- df_analysis_filt %>%
+  mutate(
+    reporting_sim1  = to_indicator(sim1_Phishing_Reported_On),
+    reporting_sim2  = to_indicator(sim2_Phishing_Reported_On),
+
+    reporting_total = 
+                      reporting_sim1 + reporting_sim2
+  )
+df_analysis_filt %>%
+  summarise(
+    sim1  = mean(reporting_sim1  == 1, na.rm = TRUE) * 100,
+    sim2  = mean(reporting_sim2  == 1, na.rm = TRUE) * 100
+  )
+
+##-----------------------------------
+## 15) difficulty rating
+## -------------------------------------------------
+
+difficulty_consensus <- tibble(
+  email_id = c(1, 2, 3, 4),
+  difficulty_ord = c(1, 2, 2, 3)
+)
+
+df_analysis_filt <- df_analysis_filt %>%
+  mutate(
+    difficulty_email1 = difficulty_consensus$difficulty_ord[ difficulty_consensus$email_id == 1 ],
+    difficulty_email2 = difficulty_consensus$difficulty_ord[ difficulty_consensus$email_id == 2 ],
+    difficulty_email3 = difficulty_consensus$difficulty_ord[ difficulty_consensus$email_id == 3 ],
+    difficulty_email4 = difficulty_consensus$difficulty_ord[ difficulty_consensus$email_id == 4 ]
+    
+
+  )
+
+
+
+##------------------------
+##Reporting
+##------------------------
+
+is_reported_val <- function(x) {
+  x <- trimws(as.character(x))
+  !is.na(x) & x != "" & x != "--"
+}
+
+
+df_analysis_filt$reported_sim1 <- is_reported_val(df_analysis_filt$sim1_Phishing_Reported_On)
+df_analysis_filt$reported_sim2 <- is_reported_val(df_analysis_filt$sim2_Phishing_Reported_On)
+
+
+df_analysis_filt$reported_any <- df_analysis_filt$reported_sim1 | df_analysis_filt$reported_sim2
+
+df_analysis_filt$reported_when <- ifelse(df_analysis_filt$reported_sim1 & df_analysis_filt$reported_sim2, "both",
+                            ifelse(df_analysis_filt$reported_sim1, "sim1",
+                            ifelse(df_analysis_filt$reported_sim2, "sim2", "none")))
+df_analysis_filt$reported_when <- factor(
+  df_analysis_filt$reported_when,
+  levels = c("none", "sim1", "sim2", "both")
+)
+
+
+total_sample <- nrow(df_analysis_filt)
+
+
+counts <- c(
+  total = total_sample,
+  sim1  = sum(df_analysis_filt$reported_sim1),
+  sim2  = sum(df_analysis_filt$reported_sim2),
+  any   = sum(df_analysis_filt$reported_any),
+  both  = sum(df_analysis_filt$reported_sim1 & df_analysis_filt$reported_sim2)
+)
+
+rates <- counts / total_sample
+
+counts
+rates
+
+
+
+
+##------------------------
+##Cronbach's alpha
+##------------------------
+
+alphas <- list(
+
+  optimism_self = psych::alpha(
+    df_analysis_filt %>% select(Optimism_bias_self_1, Optimism_bias_self_2)
+  ),
+
+  optimism_other = psych::alpha(
+    df_analysis_filt %>% select(Optimism_bias_other_1, Optimism_bias_other_2)
+  ),
+
+  self_efficacy = psych::alpha(
+    df_analysis_filt %>% select(self_efficacy_1:self_efficacy_4)
+  ),
+
+  risk_perception = psych::alpha(
+    df_analysis_filt %>% 
+      select(risk_perception_1:risk_perception_4,
+             risk_perception_6)
+  ),
+
+  locus_of_control = psych::alpha(
+    df_analysis_filt %>% select(locus_of_control_1:locus_of_control_12)
+  ),
+
+  acceptance = psych::alpha(
+    df_analysis_filt %>%
+      select(`Acceptance _1`:`Acceptance _6`,
+             `Acceptance _8`)
+  ),
+
+  negative_emotions = psych::alpha(
+    df_analysis_filt %>%
+      select(negative_emotions_1:negative_emotions_10,
+             negative_emotions_12:negative_emotions_13)
+  ),
+
+  training_intention = psych::alpha(
+    df_analysis_filt %>% select(`Training intention _1`:`Training intention _5`)
+  ),
+
+  per_orga_security = psych::alpha(
+    df_analysis_filt %>% select(Q21_1:Q21_3)
+  ),
+
+  feeling_attacked = psych::alpha(
+    df_analysis_filt %>% select(Q22_1:Q22_2)
+  )
+)
+
+
+
+lapply(names(alphas), function(n) {
+  cat(sprintf("%-22s α = %.3f\n", n, alphas[[n]]$total$raw_alpha))
+})
+```
+
+
+#Assumption checks:
+```{r}
+ ## -------------------------------------------------
+## Assumption checks (uses df_analysis_filt)
+## -------------------------------------------------
+
+## 1) Distribution diagnostics --------------------------------
+
+vars_to_check <- c(
+  
+  "clicked_sim0", "clicked_sim05", "clicked_sim1", "clicked_sim2",
+  "compromised_sim0", "compromised_sim05", "compromised_sim1", "compromised_sim2",
+  "reported_sim1", "reported_sim2",
+  "clicked", "compromised", "reported",
+  "optimism_bias", "risk_perception", "negative_emotions",
+  "acceptance", "self_efficacy", "locus_of_control", "training_intention"
+)
+
+# check classes
+sapply(vars_to_check, \(v) paste(class(df_analysis_filt[[v]]), collapse = ","))
+
+# Histograms + skewness 
+par(mfrow = c(3, 3))  
+
+for (var in vars_to_check) {
+  x <- df_analysis_filt[[var]]
+  if (is.logical(x)) x <- as.integer(x)  
+
+  hist(x,
+       main = paste("Histogram of", var),
+       xlab = var,
+       col = "lightblue",
+       breaks = 20,
+       border = "white")
+
+  cat("Variable:", var, "\n")
+  cat("  Skewness :", round(skewness(x, na.rm = TRUE), 2), "\n")
+  cat("  Kurtosis :", round(kurtosis(x, na.rm = TRUE), 2), "\n\n")
+}
+
+par(mfrow = c(1, 1)) 
+
+
+## 2) Linearity check: Training intention vs each predictor ----
+##    (Scatter + lm smoother)
+
+predictors <- c(
+  "clicked_sim1",
+  "optimism_bias",
+  "risk_perception",
+  "negative_emotions",
+  "acceptance",
+  "self_efficacy",
+  "locus_of_control",
+  "years_org_num"
+)
+
+outcome <- "training_intention"
+
+plot_list <- lapply(predictors, function(var) {
+  ggplot(df_analysis_filt, aes_string(x = var, y = outcome)) +
+    geom_point(alpha = 0.4) +
+    geom_smooth(method = "lm", se = FALSE) +
+    theme_minimal() +
+    labs(
+      title = paste("Training Intention ~", var),
+      x = var,
+      y = "Training Intention"
+    )
+})
+
+wrap_plots(plot_list, ncol = 3)
+
+
+## 3) Missing data and imputation (mice)
+
+model_vars <- c(
+  "training_intention",
+  "optimism_bias",
+  "risk_perception",
+  "negative_emotions",
+  "acceptance",
+  "self_efficacy",
+  "locus_of_control",
+  "years_org_num"
+)
+
+df_sub <- df_analysis_filt[, model_vars]
+
+
+imp <- mice(df_sub, method = "pmm", m = 5, seed = 123)
+
+
+model_imp <- with(
+  imp,
+  lm(training_intention ~ optimism_bias + risk_perception +
+       negative_emotions + acceptance + self_efficacy + locus_of_control +
+       years_org_num)
+)
+
+cat("\nPooled results after MI:\n")
+print(summary(pool(model_imp)))
+
+
+## 4) Single completed dataset model------
+
+
+df_complete1 <- complete(imp, 1)
+
+lm_single <- lm(
+  training_intention ~ optimism_bias + risk_perception +
+    negative_emotions + acceptance + self_efficacy + locus_of_control +
+    years_org_num,
+  data = df_complete1
+)
+
+cat("\nModel summary on completed dataset 1:\n")
+print(summary(lm_single))
+
+
+## 5) Assumption tests on lm_single ----------------------------
+##    5a Heteroskedasticity (Breusch-Pagan)
+##    5b Multicollinearity (VIF)
+##    5c Independence of residuals (Durbin-Watson)
+##    5d Influence / Outliers (Cook's distance)
+
+# 5a) Heteroskedasticity
+cat("\nBreusch-Pagan test (heteroskedasticity):\n")
+print(bptest(lm_single))
+
+# 5b) Multicollinearity
+cat("\nVariance Inflation Factors (VIF):\n")
+print(vif(lm_single))
+
+# 5c) Autocorrelation / Independence
+cat("\nDurbin-Watson test (residual independence):\n")
+print(dwtest(lm_single))
+
+# 5d) Cook's distance plot
+plot(cooks.distance(lm_single), type = "h",
+     main = "Cook's Distance",
+     ylab = "Cook's D")
+abline(h = 4 / nrow(df_complete1), col = "red", lty = 2)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+#Hypothesis 1: Level of compromise
+```{r}
+
+
+## -------------------------------------------------
+## Mediation: level_compromised_sim1 → Mediatoren → level_compromised_sim2
+## -------------------------------------------------
+df_analysis_filt <- df_analysis_filt %>%
+  mutate(
+   
+    Gender = factor(Gender),
+    age = factor(
+      Age,
+      levels = c("18-24", "25-34", "35-44", "45-54", "55-64", "65+"),
+      ordered = TRUE
+    ),
+    age_num = as.numeric(age),
+
+    gender_bin = case_when(
+      tolower(as.character(Gender)) %in% c("female", "f", "weiblich") ~ 1,
+      tolower(as.character(Gender)) %in% c("male", "m", "männlich")   ~ 0,
+      TRUE ~ NA_real_
+    ),
+
+  
+    jobrole_bin01 = ifelse(JobRole_bin == "non-academic", 1, 0),
+
+    clicked_sim1     = as.numeric(clicked_sim1),
+    clicked_sim2     = as.numeric(clicked_sim2),
+    compromised_sim1 = as.numeric(compromised_sim1),
+    compromised_sim2 = as.numeric(compromised_sim2),
+
+    level_compromised_sim1 = case_when(
+      compromised_sim1 == 1 ~ 2L,
+      clicked_sim1     == 1 ~ 1L,
+      TRUE                  ~ 0L
+    ),
+    level_compromised_sim2 = case_when(
+      compromised_sim2 == 1 ~ 2L,
+      clicked_sim2     == 1 ~ 1L,
+      TRUE                  ~ 0L
+    )
+  )
+
+table(
+  JobRole = ifelse(df_analysis$jobrole_bin01 == 1,
+                   "Non-academic",
+                   "Academic")
+)
+
+
+
+
+
+## -------------------------------------------------
+## Mediation: level_compromised_sim1 → Mediatoren → level_compromised_sim2
+## -------------------------------------------------
+df_analysis_filt <- df_analysis_filt %>%
+  mutate(
+    Gender = factor(Gender),
+
+    age = factor(
+      Age,
+      levels = c("18-24", "25-34", "35-44", "45-54", "55-64", "65+"),
+      ordered = TRUE
+    ),
+    age_num = as.numeric(age),
+
+    gender_bin = case_when(
+      tolower(as.character(Gender)) %in% c("female", "f", "weiblich") ~ 1,
+      tolower(as.character(Gender)) %in% c("male", "m", "männlich")   ~ 0,
+      TRUE ~ NA_real_
+    ),
+
+    jobrole_bin01 = ifelse(JobRole_bin == "non-academic", 1, 0),
+
+    clicked_sim1     = as.numeric(clicked_sim1),
+    clicked_sim2     = as.numeric(clicked_sim2),
+    compromised_sim1 = as.numeric(compromised_sim1),
+    compromised_sim2 = as.numeric(compromised_sim2),
+
+    level_compromised_sim1 = case_when(
+      compromised_sim1 == 1 ~ 2L,
+      clicked_sim1     == 1 ~ 1L,
+      TRUE                  ~ 0L
+    ),
+    level_compromised_sim2 = case_when(
+      compromised_sim2 == 1 ~ 2L,
+      clicked_sim2     == 1 ~ 1L,
+      TRUE                  ~ 0L
+    )
+  )
+
+
+## -------------------------------------------------
+## SEM-Model
+## -------------------------------------------------
+
+med_model21_job <- '
+  # predictor (sim1) to mediator
+  optimism_bias     ~ a1*level_compromised_sim1 + age_num + gender_bin + jobrole_bin01 + years_org_num
+  risk_perception   ~ a2*level_compromised_sim1 + age_num + gender_bin + jobrole_bin01 + years_org_num
+  negative_emotions ~ a3*level_compromised_sim1 + age_num + gender_bin + jobrole_bin01 + years_org_num
+  acceptance        ~ a4*level_compromised_sim1 + age_num + gender_bin + jobrole_bin01 + years_org_num
+  self_efficacy     ~ a5*level_compromised_sim1 + age_num + gender_bin + jobrole_bin01 + years_org_num
+  locus_of_control  ~ a6*level_compromised_sim1 + age_num + gender_bin + jobrole_bin01 + years_org_num
+
+  # outcome (sim2)
+  level_compromised_sim2 ~ c3*level_compromised_sim1 +
+                           b1*optimism_bias + b2*risk_perception +
+                           b3*negative_emotions + b4*acceptance +
+                           b5*self_efficacy + b6*locus_of_control +
+                           age_num + gender_bin + jobrole_bin01 + years_org_num
+
+  # indirect effects
+  ind1 := a1*b1
+  ind2 := a2*b2
+  ind3 := a3*b3
+  ind4 := a4*b4
+  ind5 := a5*b5
+  ind6 := a6*b6
+  ind_total := ind1 + ind2 + ind3 + ind4 + ind5 + ind6
+
+  # total effect
+  total := c3 + ind_total
+'
+
+
+## -------------------------------------------------
+## Model fit
+## -------------------------------------------------
+
+fit_mediation_job <- sem(
+  med_model21_job,
+  data = df_analysis_filt,
+  estimator = "MLR",
+  missing = "ML",
+  meanstructure = TRUE
+)
+
+summary(fit_mediation_job, standardized = TRUE, fit.measures = TRUE, rsquare = TRUE)
+
+
+
+# ----------------------------------------
+# Simple direct model (linear, no mediation)
+# ----------------------------------------
+
+df_direct <- df_analysis_filt %>%
+  mutate(
+    lvl1 = as.numeric(level_compromised_sim1),
+    lvl2 = as.numeric(level_compromised_sim2)
+  )
+
+fit_direct_beta <- lm(
+  scale(lvl2) ~ scale(lvl1) + scale(age_num) + gender_bin +
+    jobrole_bin01 + scale(years_org_num),
+  data = df_direct
+)
+
+summary(fit_direct_beta)
+
+
+
+
+```
+
+
+
+
+
+#Post Hoc H1: McNemar
+
+```{r}
+## -------------------------------------------------
+## 1) Change between Simulation 1 and 2 (paired analysis)
+## -------------------------------------------------
+
+
+cat("Clicked:\n")
+df_pair <- df_analysis_filt %>%
+  filter(!is.na(clicked_sim1) & !is.na(clicked_sim2))
+
+pct_click1 <- mean(df_pair$clicked_sim1, na.rm = TRUE) * 100
+pct_click2 <- mean(df_pair$clicked_sim2, na.rm = TRUE) * 100
+cat(sprintf("Click rates: Sim1 = %.1f%%, Sim2 = %.1f%%\n", pct_click1, pct_click2))
+
+tab_click <- table(df_pair$clicked_sim1, df_pair$clicked_sim2)
+print(tab_click)
+mcnemar_click <- mcnemar.test(tab_click)
+cat("McNemar test for clicks (Sim1 vs Sim2):\n")
+print(mcnemar_click)
+
+
+cat("Compromised:\n")
+df_pair_comp <- df_analysis_filt %>%
+  filter(!is.na(compromised_sim1) & !is.na(compromised_sim2))
+
+pct_comp1 <- mean(df_pair_comp$compromised_sim1, na.rm = TRUE) * 100
+pct_comp2 <- mean(df_pair_comp$compromised_sim2, na.rm = TRUE) * 100
+cat(sprintf("Compromise rates: Sim1 = %.1f%%, Sim2 = %.1f%%\n", pct_comp1, pct_comp2))
+
+tab_comp <- table(df_pair_comp$compromised_sim1, df_pair_comp$compromised_sim2)
+print(tab_comp)
+mcnemar_comp <- mcnemar.test(tab_comp)
+cat("McNemar test for compromises (Sim1 vs Sim2):\n")
+print(mcnemar_comp)
+
+
+
+## -------------------------------------------------
+## 2) Pairwise test across all four simulation cycles (descriptive + Cochran-Armitage test)
+##    For testing if there is a significant trend over time
+## -------------------------------------------------
+
+
+count_yes  <- function(x) sum(x == 1, na.rm = TRUE)
+count_no   <- function(x) sum(x == 0, na.rm = TRUE)
+denom_N    <- function(x) sum(!is.na(x))
+
+
+click_counts <- tibble(
+  sim    = c("sim0","sim0.5","sim1","sim2"),
+  yes    = c(count_yes(df_analysis_filt$clicked_sim0),
+             count_yes(df_analysis_filt$clicked_sim05),
+             count_yes(df_analysis_filt$clicked_sim1),
+             count_yes(df_analysis_filt$clicked_sim2)),
+  no     = c(count_no(df_analysis_filt$clicked_sim0),
+             count_no(df_analysis_filt$clicked_sim05),
+             count_no(df_analysis_filt$clicked_sim1),
+             count_no(df_analysis_filt$clicked_sim2))
+) %>%
+  mutate(
+    denom = yes + no,
+    pct   = round(100 * yes / denom, 1)
+  )
+
+comp_counts <- tibble(
+  sim    = c("sim0","sim0.5","sim1","sim2"),
+  yes    = c(count_yes(df_analysis_filt$compromised_sim0),
+             count_yes(df_analysis_filt$compromised_sim05),
+             count_yes(df_analysis_filt$compromised_sim1),
+             count_yes(df_analysis_filt$compromised_sim2)),
+  no     = c(count_no(df_analysis_filt$compromised_sim0),
+             count_no(df_analysis_filt$compromised_sim05),
+             count_no(df_analysis_filt$compromised_sim1),
+             count_no(df_analysis_filt$compromised_sim2))
+) %>%
+  mutate(
+    denom = yes + no,
+    pct   = round(100 * yes / denom, 1)
+  )
+
+cat("\nClick rates by simulation:\n")
+print(click_counts)
+
+cat("\nCompromise rates by simulation:\n")
+print(comp_counts)
+
+
+pairwise_prop_test <- function(df_counts, label){
+  sims <- df_counts$sim
+  for(i in 1:(nrow(df_counts)-1)){
+    s1 <- df_counts[i, ]
+    s2 <- df_counts[i+1, ]
+    cat("\n", label, ": ", s1$sim, " vs ", s2$sim, "\n", sep = "")
+    
+    print(
+      prop.test(
+        x = c(s1$yes, s2$yes),
+        n = c(s1$denom, s2$denom),
+        alternative = "less"  
+      )
+    )
+  }
+}
+
+cat("\n--- Pairwise tests for CLICK ---\n")
+pairwise_prop_test(click_counts, "Click")
+
+cat("\n--- Pairwise tests for COMPROMISE ---\n")
+pairwise_prop_test(comp_counts, "Compromise")
+
+
+
+##---------------
+##Combined
+##---------------
+library(ggplot2)
+library(dplyr)
+
+rates_long <- bind_rows(
+  click_counts %>% mutate(metric = "Click"),
+  comp_counts  %>% mutate(metric = "Compromise")
+) %>%
+  mutate(
+    sim_label = dplyr::recode(
+      sim,
+      "sim0"   = "Simulation 1",
+      "sim0.5" = "Simulation 2",
+      "sim1"   = "Simulation 3",
+      "sim2"   = "Simulation 4"
+    )
+  )
+
+
+p_both_usenix <- ggplot(
+  rates_long,
+  aes(x = sim_label, y = pct, group = metric, color = metric)
+) +
+  geom_line(linewidth = 0.6) +
+  geom_point(size = 1.8) +
+  scale_color_manual(
+    values = c(
+      "Click" = "steelblue",       # blau
+      "Compromise" = "firebrick"   # rot
+    )
+  ) +
+  scale_y_continuous(
+    limits = c(0, NA),
+    expand = expansion(mult = c(0, 0.04))
+  ) +
+  labs(
+    x = "Simulation",
+    y = "Rate (%)",
+    color = NULL
+  ) +
+  theme_classic(base_size = 10) +
+  theme(
+    plot.title = element_blank(),
+
+    axis.text.x = element_text(size = 11, margin = margin(t = 4)),
+    axis.text.y = element_text(size = 11),
+
+    axis.line = element_line(linewidth = 0.8),
+    axis.ticks = element_line(linewidth = 0.8),
+
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 10),
+
+    legend.margin = margin(t = 0, r = 0, b = 0, l = 0),
+    legend.box.margin = margin(t = -6, r = 0, b = -6, l = 0),
+    plot.margin = margin(5, 5, 2, 5),
+
+    legend.background = element_blank(),
+    legend.key = element_blank()
+  )
+
+ggsave(
+  "phishing_rates_combined_usenix.pdf",
+  plot = p_both_usenix,
+  width = 6,
+  height = 4,
+  units = "in",
+  device = cairo_pdf
+)
+
+
+
+```
+
+
+#Hypothesis 2: Cybersecurity training intention
+
+```{r}
+
+
+
+df_analysis_filt <- df_analysis_filt %>%
+  mutate(
+    cybsafeLinkClicked = as.numeric(cybsafeLinkClicked),
+    training_intention = as.numeric(training_intention)
+  )
+
+## -------------------------------------------------
+## H2a: Mediation model with training_intention as outcome
+## -------------------------------------------------
+
+model_H3a <- '
+  # a-paths: predictor -> mediators
+  optimism_bias     ~ a1*level_compromised_sim1 + age_num + gender_bin + jobrole_bin01 + years_org_num
+  risk_perception   ~ a2*level_compromised_sim1 + age_num + gender_bin + jobrole_bin01 + years_org_num
+  negative_emotions ~ a3*level_compromised_sim1 + age_num + gender_bin + jobrole_bin01 + years_org_num
+  acceptance        ~ a4*level_compromised_sim1 + age_num + gender_bin + jobrole_bin01 + years_org_num
+  self_efficacy     ~ a5*level_compromised_sim1 + age_num + gender_bin + jobrole_bin01 + years_org_num
+  locus_of_control  ~ a6*level_compromised_sim1 + age_num + gender_bin + jobrole_bin01 + years_org_num
+
+  # b-paths + direct path
+  training_intention ~ c3*level_compromised_sim1 +
+                       b1*optimism_bias +
+                       b2*risk_perception +
+                       b3*negative_emotions +
+                       b4*acceptance +
+                       b5*self_efficacy +
+                       b6*locus_of_control +
+                       age_num + gender_bin + jobrole_bin01 + years_org_num
+
+  # indirect effects
+  ind1 := a1*b1
+  ind2 := a2*b2
+  ind3 := a3*b3
+  ind4 := a4*b4
+  ind5 := a5*b5
+  ind6 := a6*b6
+
+  ind_total := ind1 + ind2 + ind3 + ind4 + ind5 + ind6
+  total_effect := c3 + ind_total
+'
+
+
+fit_H3a <- sem(
+  model_H3a,
+  data = df_analysis_filt,
+  estimator = "MLR",     
+  missing   = "ML",       
+  meanstructure = TRUE,
+  fixed.x = FALSE
+)
+
+summary(
+  fit_H3a,
+  standardized = TRUE,
+  fit.measures = TRUE,
+  rsquare = TRUE
+)
+
+
+## -------------------------------------------------
+## Post Hoc H2: Descriptives: uptake of training / cybsafeLinkClicked
+## -------------------------------------------------
+
+N_total <- nrow(df_analysis_filt)
+
+
+N_observed <- sum(!is.na(df_analysis_filt$cybsafeLinkClicked))
+
+
+N_clicked <- sum(df_analysis_filt$cybsafeLinkClicked == 1, na.rm = TRUE)
+
+pct_of_total    <- round(100 * N_clicked / N_total, 1)
+pct_of_observed <- round(100 * N_clicked / N_observed, 1)
+
+cat("\nTraining uptake summary:\n")
+cat(" Total N in df_analysis_filt:         ", N_total, "\n")
+cat(" N who clicked training link:    ", N_clicked, "\n")
+cat(" % of FULL sample:               ", pct_of_total, "%\n")
+
+
+df_analysis_filt <- df_analysis_filt %>%
+  mutate(
+    cybsafeLinkClicked = as.numeric(cybsafeLinkClicked),
+    training_intention = as.numeric(training_intention)
+  )
+
+mod_biv <- glm(
+  cybsafeLinkClicked ~ training_intention + age_num + gender_bin +
+    jobrole_bin01 + years_org_num,
+  data = df_analysis_filt,
+  family = binomial
+)
+
+summary(mod_biv)
+
+
+
+
+##----------------
+##Sensitivity check
+##----------------
+
+model_H3a_cov <- paste0(
+  model_H3a,
+  '
+  optimism_bias ~~ risk_perception + negative_emotions +
+                   acceptance + self_efficacy + locus_of_control
+
+  risk_perception ~~ negative_emotions + acceptance +
+                     self_efficacy + locus_of_control
+
+  negative_emotions ~~ acceptance + self_efficacy +
+                       locus_of_control
+
+  acceptance ~~ self_efficacy + locus_of_control
+
+  self_efficacy ~~ locus_of_control
+  '
+)
+
+fit_H3a_cov <- sem(
+  model_H3a_cov,
+  data = df_analysis_filt,
+  estimator = "MLR",
+  missing = "ML",
+  meanstructure = TRUE,
+  fixed.x = FALSE
+)
+
+
+
+```
+
+#H3: Personality Level Repeat Clicker (30 Imputations)
+
+```{r}
+library(dplyr)
+library(mice)
+
+## ----------------------------
+## Helpers
+## ----------------------------
+
+
+to_delivered <- function(x) {
+  x <- trimws(as.character(x))
+  dplyr::case_when(
+    is.na(x) | x == "" ~ 0L,
+    x == "--"          ~ 0L,
+    TRUE               ~ 1L
+  )
+}
+
+
+to_clicked <- function(x) {
+  x <- trimws(as.character(x))
+  dplyr::case_when(
+    is.na(x) | x == "" ~ 0L,
+    x == "--"          ~ 0L,
+    TRUE               ~ 1L
+  )
+}
+
+## ----------------------------
+## 1) Build analysis variables
+## ----------------------------
+
+df_analysis_filt <- df_analysis_filt %>%
+  mutate(
+   
+    Gender = factor(Gender),
+    age = factor(
+      Age,
+      levels = c("18-24", "25-34", "35-44", "45-54", "55-64", "65+"),
+      ordered = TRUE
+    ),
+    age_num = as.numeric(age),
+
+    gender_bin = case_when(
+      tolower(as.character(Gender)) %in% c("female", "f", "weiblich") ~ 1,
+      tolower(as.character(Gender)) %in% c("male", "m", "männlich")   ~ 0,
+      TRUE ~ NA_real_
+    ),
+
+    
+    JobRole_bin = as.factor(JobRole_bin),
+
+    
+    sent_sim0  = to_delivered(`sim0_Opened_Time_c1_2023-03-29`),
+    sent_sim05 = to_delivered(`sim0.5_Opened_Time_c2_2024-07-22`),
+
+    
+    sent_sim1 = to_delivered(sim1_SuccessfullyDeliveredEmail_TimeStamp),
+    sent_sim2 = to_delivered(sim2_SuccessfullyDeliveredEmail_TimeStamp),
+
+
+    # CLICKED
+    clicked_sim0  = to_clicked(`sim0_Viewed Landing Page_Time_c1_2023-03-29`),
+    clicked_sim05 = to_clicked(`sim0.5_Viewed Landing Page_Time_c2_2024-07-22`),
+    clicked_sim1  = to_clicked(sim1_EmailLinkClicked_TimeStamp),
+    clicked_sim2  = to_clicked(sim2_EmailLinkClicked_TimeStamp)
+  ) %>%
+  
+  mutate(
+    clicked_sim0  = clicked_sim0  * sent_sim0,
+    clicked_sim05 = clicked_sim05 * sent_sim05,
+    clicked_sim1  = clicked_sim1  * sent_sim1,
+    clicked_sim2  = clicked_sim2  * sent_sim2
+  ) %>%
+  mutate(
+    n_sent    = sent_sim0 + sent_sim05 + sent_sim1 + sent_sim2,
+    n_clicked = clicked_sim0 + clicked_sim05 + clicked_sim1 + clicked_sim2,
+    click_rate = if_else(n_sent > 0, n_clicked / n_sent, NA_real_)
+  )
+
+
+sum(df_analysis_filt$n_clicked > df_analysis_filt$n_sent, na.rm = TRUE)
+
+
+df_analysis_filt <- df_analysis_filt %>%
+  mutate(
+    repeat_clicker = case_when(
+      n_sent < 3 ~ NA_integer_,
+      n_clicked >= 2 ~ 1L,
+      TRUE ~ 0L
+    )
+  )
+
+table(df_analysis_filt$repeat_clicker, useNA = "ifany")
+
+## ----------------------------
+## 2) Complete exposure subset (4/4)
+## ----------------------------
+
+df_cc4 <- df_analysis_filt %>%
+  filter(sent_sim0 == 1, sent_sim05 == 1, sent_sim1 == 1, sent_sim2 == 1) %>%
+  mutate(
+    n_sent = 4L,
+    n_clicked = clicked_sim0 + clicked_sim05 + clicked_sim1 + clicked_sim2
+  )
+
+cat("N mit vollständigem Exposure (4/4):", nrow(df_cc4), "\n")
+
+## ----------------------------
+## 3) Imputation dataset (predictors only)
+##    age_num, gender_bin, JobRole_bin, years_org_num NICHT imputieren
+## ----------------------------
+
+dat_imp <- df_cc4 %>%
+  dplyr::select(
+    n_clicked,          
+    optimism_bias,
+    self_efficacy,
+    risk_perception,
+    locus_of_control,
+    acceptance,
+    negative_emotions,
+    age_num,            
+    gender_bin,         
+    JobRole_bin,
+    years_org_num
+  )
+
+meth <- make.method(dat_imp)
+
+
+meth["n_clicked"] <- ""
+
+
+meth[c("age_num", "gender_bin", "JobRole_bin", "years_org_num")] <- ""
+
+
+meth[c(
+  "optimism_bias",
+  "self_efficacy",
+  "risk_perception",
+  "locus_of_control",
+  "acceptance",
+  "negative_emotions"
+)] <- "pmm"
+
+pred <- make.predictorMatrix(dat_imp)
+pred[,] <- 1
+diag(pred) <- 0
+
+
+pred["n_clicked", ] <- 0
+
+
+
+
+set.seed(123)
+imp <- mice(
+  dat_imp,
+  m = 30,
+  method = meth,
+  predictorMatrix = pred,
+  maxit = 30
+  
+)
+
+
+zvars <- c("optimism_bias","self_efficacy","risk_perception",
+           "locus_of_control","acceptance","negative_emotions","age_num",
+           "years_org_num")
+
+fit_imp_z <- with(
+  imp,
+  {
+    d <- data.frame(n_clicked, optimism_bias, self_efficacy, risk_perception,
+                    locus_of_control, acceptance, negative_emotions,
+                    age_num, gender_bin, JobRole_bin, years_org_num)
+
+    for (v in intersect(zvars, names(d))) {
+      d[[v]] <- as.numeric(scale(d[[v]]))
+    }
+
+    glm(
+      cbind(n_clicked, 4 - n_clicked) ~
+        optimism_bias + self_efficacy + risk_perception +
+        locus_of_control + acceptance + negative_emotions +
+        age_num + gender_bin + JobRole_bin + years_org_num,
+      family = binomial(),
+      data = d
+    )
+  }
+)
+
+res_z <- pool(fit_imp_z)
+summary(res_z)
+
+
+sum_z <- summary(res_z)
+
+sum_z$OR        <- exp(sum_z$estimate)
+sum_z$OR_low95  <- exp(sum_z$estimate - 1.96 * sum_z$std.error)
+sum_z$OR_high95 <- exp(sum_z$estimate + 1.96 * sum_z$std.error)
+
+sum_z[, c("term","estimate","std.error","p.value","OR","OR_low95","OR_high95")]
+
+
+
+## ============================================================
+##  forest plot 
+## ============================================================
+
+df_plot_manual <- tibble::tribble(
+  ~Predictor, ~beta, ~SE, ~OR, ~OR_low, ~OR_high,
+  "Optimism bias",        0.49, 0.20, 1.64, 1.10, 2.43,
+  "Self-efficacy",       -0.26, 0.25, 0.77, 0.47, 1.25,
+  "Risk perception",     -0.17, 0.14, 0.85, 0.65, 1.10,
+  "Locus of control",    -0.24, 0.17, 0.79, 0.57, 1.09,
+  "Acceptance",           0.14, 0.14, 1.15, 0.87, 1.52,
+  "Negative emotions",    0.01, 0.12, 1.01, 0.79, 1.28
+) %>%
+  mutate(
+    sig = (OR_low > 1) | (OR_high < 1),
+    Predictor = factor(Predictor, levels = Predictor[order(OR, decreasing = TRUE)]))
+
+
+
+p <- ggplot(df_plot_manual, aes(x = OR, y = Predictor)) +
+  geom_vline(xintercept = 1, linetype = "dashed",
+             linewidth = 0.7, color = "grey40") +
+  geom_errorbarh(
+    aes(xmin = OR_low, xmax = OR_high),
+    height = 0.20,
+    linewidth = 0.8,
+    color = "grey30"
+  ) +
+  geom_point(
+    aes(fill = sig),
+    shape = 21,
+    size = 3.6,
+    color = "black"
+  ) +
+  scale_fill_manual(
+    values = c(`TRUE` = "black", `FALSE` = "white"),
+    guide = "none"
+  ) +
+  scale_x_log10(
+    breaks = c(0.5, 0.75, 1, 1.25, 1.5, 2, 3),
+    labels = c("0.5","0.75","1","1.25","1.5","2","3")
+  ) +
+  scale_y_discrete(limits = rev) +   
+  labs(
+    x = "Odds ratio (log scale) with 95% CI",
+    y = NULL
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text.y  = element_text(size = 15),
+    axis.text.x  = element_text(size = 13),
+    axis.title.x = element_text(size = 14),
+    axis.line.y  = element_blank(),
+    axis.ticks.y = element_blank(),
+    plot.margin  = margin(10, 15, 10, 10)
+  )
+
+print(p)
+
+
+ggsave(
+  "forest_plot_odds_ratios.pdf",
+  plot   = p,
+  width  = 7,
+  height = 4.5,
+  units  = "in",
+  device = cairo_pdf
+)
+
+##----------------------
+##Histogram click sums and compromise probability
+##----------------------
+
+local({
+
+  library(dplyr)
+  library(tidyr)
+  library(ggplot2)
+
+ 
+
+  to_binary_present <- function(x) {
+    x <- trimws(as.character(x))
+    dplyr::case_when(
+      is.na(x) | x == "" ~ 0L,
+      x == "--"          ~ 0L,
+      TRUE               ~ 1L
+    )
+  }
+
+ 
+  to_clicked <- function(x) {
+    x <- trimws(as.character(x))
+    dplyr::case_when(
+      is.na(x) | x == "" ~ 0L,
+      x == "--"          ~ 0L,
+      TRUE               ~ 1L
+    )
+  }
+
+  
+  wilson_ci <- function(x, n, z = 1.96) {
+    if (n == 0) return(c(NA_real_, NA_real_))
+    p <- x / n
+    denom <- 1 + z^2 / n
+    center <- (p + z^2/(2*n)) / denom
+    half <- (z * sqrt((p*(1-p) + z^2/(4*n)) / n)) / denom
+    c(center - half, center + half)
+  }
+
+  ## ----------------------------
+  ## 1) Build per-person variables
+  ## ----------------------------
+
+  dat0 <- df_analysis_filt %>%
+    mutate(
+      
+      sent_sim0  = to_binary_present(`sim0_Opened_Time_c1_2023-03-29`),
+      sent_sim05 = to_binary_present(`sim0.5_Opened_Time_c2_2024-07-22`),
+      sent_sim1  = to_binary_present(sim1_SuccessfullyDeliveredEmail_TimeStamp),
+      sent_sim2  = to_binary_present(sim2_SuccessfullyDeliveredEmail_TimeStamp),
+
+      
+      clicked_sim0  = to_clicked(`sim0_Viewed Landing Page_Time_c1_2023-03-29`),
+      clicked_sim05 = to_clicked(`sim0.5_Viewed Landing Page_Time_c2_2024-07-22`),
+      clicked_sim1  = to_clicked(sim1_EmailLinkClicked_TimeStamp),
+      clicked_sim2  = to_clicked(sim2_EmailLinkClicked_TimeStamp),
+
+      
+      clicked_sim0  = clicked_sim0  * sent_sim0,
+      clicked_sim05 = clicked_sim05 * sent_sim05,
+      clicked_sim1  = clicked_sim1  * sent_sim1,
+      clicked_sim2  = clicked_sim2  * sent_sim2,
+
+     
+      compromised_sim0  = to_binary_present(`sim0_Data Entered_Time_c1_2023-03-29`),
+      compromised_sim05 = to_binary_present(`sim0.5_Data Entered_Time_c2_2024-07-22`),
+      compromised_sim1  = to_binary_present(sim1_CredSupplied_TimeStamp_Compromised),
+      compromised_sim2  = to_binary_present(sim2_CredSupplied_TimeStamp_Compromised),
+
+      
+      compromised_sim0  = compromised_sim0  * sent_sim0,
+      compromised_sim05 = compromised_sim05 * sent_sim05,
+      compromised_sim1  = compromised_sim1  * sent_sim1,
+      compromised_sim2  = compromised_sim2  * sent_sim2
+    ) %>%
+    mutate(
+      n_sent = sent_sim0 + sent_sim05 + sent_sim1 + sent_sim2,
+      n_clicked = clicked_sim0 + clicked_sim05 + clicked_sim1 + clicked_sim2,
+      n_compromised = compromised_sim0 + compromised_sim05 + compromised_sim1 + compromised_sim2,
+      any_compromise = if_else(n_compromised >= 1, "Compromised (>=1)", "Not compromised")
+    )
+
+  
+  df_cc4 <- dat0 %>%
+    filter(sent_sim0 == 1, sent_sim05 == 1, sent_sim1 == 1, sent_sim2 == 1) %>%
+    mutate(n_sent = 4L)
+
+  cat("N complete exposure (4/4):", nrow(df_cc4), "\n")
+
+library(dplyr)
+library(ggplot2)
+
+
+wilson_ci <- function(x, n, z = 1.96) {
+  if (is.na(n) || n == 0) return(c(NA_real_, NA_real_))
+  p <- x / n
+  denom <- 1 + z^2 / n
+  center <- (p + z^2/(2*n)) / denom
+  half <- (z * sqrt((p*(1-p) + z^2/(4*n)) / n)) / denom
+  c(center - half, center + half)
+}
+
+sumdat <- df_cc4 %>%
+  filter(n_clicked >= 1) %>%             
+  group_by(n_clicked) %>%
+  summarise(
+    n_people = n(),
+    clicks_total = sum(n_clicked, na.rm = TRUE),
+    comp_total   = sum(n_compromised, na.rm = TRUE),
+    rate_comp_per_click = comp_total / clicks_total,
+    ci_low  = wilson_ci(comp_total, clicks_total)[1],
+    ci_high = wilson_ci(comp_total, clicks_total)[2],
+    .groups = "drop"
+  )
+
+
+k <- max(sumdat$n_people)
+
+p <- ggplot(sumdat, aes(x = factor(n_clicked))) +
+  
+  geom_col(aes(y = n_people), fill = "grey40", color = "white") +
+
+  
+  geom_line(aes(y = rate_comp_per_click * k, group = 1), linewidth = 0.8) +
+  geom_point(aes(y = rate_comp_per_click * k), size = 3) +
+
+ 
+  geom_errorbar(
+    aes(ymin = ci_low * k, ymax = ci_high * k),
+    width = 0.10
+  ) +
+
+  scale_y_continuous(
+    name = "Number of participants",
+    sec.axis = sec_axis(~ . / k, name = "Compromise probability per click")
+  ) +
+  labs(x = "Number of phishing emails clicked (1–4)") +
+  theme_classic(base_size = 16)
+
+p
+
+ggsave(
+  "clickcount_with_compromise_per_click_overlay.pdf",
+  plot = p, width = 6, height = 4, device = cairo_pdf
+)
+
+})
+
+#####NEW
+
+library(mice)
+library(dplyr)
+
+# ------------------------------------------------------------
+# H3 donor-pool sensitivity analysis
+# ------------------------------------------------------------
+
+run_donor_sensitivity <- function(k) {
+
+  # Nur die Anzahl der PMM-Donoren wird verändert
+  imp_k <- mice(
+    dat_imp,
+    m = 100,
+    method = meth,
+    predictorMatrix = pred,
+    maxit = 30,
+    donors = k,
+    seed = 123,
+    printFlag = FALSE
+  )
+
+  # Identisches H3-Modell wie in der Hauptanalyse
+  fit_k <- with(
+    imp_k,
+    {
+      d <- data.frame(
+        n_clicked,
+        optimism_bias,
+        self_efficacy,
+        risk_perception,
+        locus_of_control,
+        acceptance,
+        negative_emotions,
+        age_num,
+        gender_bin,
+        JobRole_bin,
+        years_org_num
+      )
+
+      # Identische Standardisierung wie in der Hauptanalyse
+      for (v in intersect(zvars, names(d))) {
+        d[[v]] <- as.numeric(scale(d[[v]]))
+      }
+
+      glm(
+        cbind(n_clicked, 4 - n_clicked) ~
+          optimism_bias +
+          self_efficacy +
+          risk_perception +
+          locus_of_control +
+          acceptance +
+          negative_emotions +
+          age_num +
+          gender_bin +
+          JobRole_bin +
+          years_org_num,
+        family = binomial(),
+        data = d
+      )
+    }
+  )
+
+  # Pooling nach Rubin
+  pooled_k <- summary(pool(fit_k))
+
+  # Konfidenzintervalle und Odds Ratios
+  pooled_k |>
+    mutate(
+      donors = k,
+      critical_value = qt(.975, df),
+      CI_low  = estimate - critical_value * std.error,
+      CI_high = estimate + critical_value * std.error,
+      OR = exp(estimate),
+      OR_low95 = exp(CI_low),
+      OR_high95 = exp(CI_high)
+    )
+}
+
+# Donorpool-Größen vergleichen
+donor_results <- bind_rows(
+  lapply(c(1, 3, 5), run_donor_sensitivity)
+)
+
+# Ergebnisse für Optimism Bias
+optimism_donor_results <- donor_results |>
+  filter(term == "optimism_bias") |>
+  select(
+    donors,
+    estimate,
+    std.error,
+    statistic,
+    df,
+    p.value,
+    CI_low,
+    CI_high,
+    OR,
+    OR_low95,
+    OR_high95
+  )
+
+print(optimism_donor_results)
+
+donor_results |>
+  select(
+    donors,
+    term,
+    estimate,
+    std.error,
+    p.value,
+    CI_low,
+    CI_high
+  ) |>
+  arrange(term, donors) |>
+  tibble::as_tibble() |>
+  print(n = Inf)
+```
+
+
+
+#H3: Personality Level Repeat Clicker (100 Imputations, Donor pools 1,3 and 5)
+
+```{r}
+library(dplyr)
+library(mice)
+
+## ----------------------------
+## Helpers
+## ----------------------------
+
+
+to_delivered <- function(x) {
+  x <- trimws(as.character(x))
+  dplyr::case_when(
+    is.na(x) | x == "" ~ 0L,
+    x == "--"          ~ 0L,
+    TRUE               ~ 1L
+  )
+}
+
+
+to_clicked <- function(x) {
+  x <- trimws(as.character(x))
+  dplyr::case_when(
+    is.na(x) | x == "" ~ 0L,
+    x == "--"          ~ 0L,
+    TRUE               ~ 1L
+  )
+}
+
+## ----------------------------
+## 1) Build analysis variables
+## ----------------------------
+
+df_analysis_filt <- df_analysis_filt %>%
+  mutate(
+   
+    Gender = factor(Gender),
+    age = factor(
+      Age,
+      levels = c("18-24", "25-34", "35-44", "45-54", "55-64", "65+"),
+      ordered = TRUE
+    ),
+    age_num = as.numeric(age),
+
+    gender_bin = case_when(
+      tolower(as.character(Gender)) %in% c("female", "f", "weiblich") ~ 1,
+      tolower(as.character(Gender)) %in% c("male", "m", "männlich")   ~ 0,
+      TRUE ~ NA_real_
+    ),
+
+    
+    JobRole_bin = as.factor(JobRole_bin),
+
+    
+    sent_sim0  = to_delivered(`sim0_Opened_Time_c1_2023-03-29`),
+    sent_sim05 = to_delivered(`sim0.5_Opened_Time_c2_2024-07-22`),
+
+    
+    sent_sim1 = to_delivered(sim1_SuccessfullyDeliveredEmail_TimeStamp),
+    sent_sim2 = to_delivered(sim2_SuccessfullyDeliveredEmail_TimeStamp),
+
+
+    # CLICKED
+    clicked_sim0  = to_clicked(`sim0_Viewed Landing Page_Time_c1_2023-03-29`),
+    clicked_sim05 = to_clicked(`sim0.5_Viewed Landing Page_Time_c2_2024-07-22`),
+    clicked_sim1  = to_clicked(sim1_EmailLinkClicked_TimeStamp),
+    clicked_sim2  = to_clicked(sim2_EmailLinkClicked_TimeStamp)
+  ) %>%
+  
+  mutate(
+    clicked_sim0  = clicked_sim0  * sent_sim0,
+    clicked_sim05 = clicked_sim05 * sent_sim05,
+    clicked_sim1  = clicked_sim1  * sent_sim1,
+    clicked_sim2  = clicked_sim2  * sent_sim2
+  ) %>%
+  mutate(
+    n_sent    = sent_sim0 + sent_sim05 + sent_sim1 + sent_sim2,
+    n_clicked = clicked_sim0 + clicked_sim05 + clicked_sim1 + clicked_sim2,
+    click_rate = if_else(n_sent > 0, n_clicked / n_sent, NA_real_)
+  )
+
+
+sum(df_analysis_filt$n_clicked > df_analysis_filt$n_sent, na.rm = TRUE)
+
+
+df_analysis_filt <- df_analysis_filt %>%
+  mutate(
+    repeat_clicker = case_when(
+      n_sent < 3 ~ NA_integer_,
+      n_clicked >= 2 ~ 1L,
+      TRUE ~ 0L
+    )
+  )
+
+table(df_analysis_filt$repeat_clicker, useNA = "ifany")
+
+## ----------------------------
+## 2) Complete exposure subset (4/4)
+## ----------------------------
+
+df_cc4 <- df_analysis_filt %>%
+  filter(sent_sim0 == 1, sent_sim05 == 1, sent_sim1 == 1, sent_sim2 == 1) %>%
+  mutate(
+    n_sent = 4L,
+    n_clicked = clicked_sim0 + clicked_sim05 + clicked_sim1 + clicked_sim2
+  )
+
+cat("N mit vollständigem Exposure (4/4):", nrow(df_cc4), "\n")
+
+## ----------------------------
+## 3) Imputation dataset (predictors only)
+##    age_num, gender_bin, JobRole_bin, years_org_num NICHT imputieren
+## ----------------------------
+
+dat_imp <- df_cc4 %>%
+  dplyr::select(
+    n_clicked,          
+    optimism_bias,
+    self_efficacy,
+    risk_perception,
+    locus_of_control,
+    acceptance,
+    negative_emotions,
+    age_num,            
+    gender_bin,         
+    JobRole_bin,
+    years_org_num
+  )
+
+meth <- make.method(dat_imp)
+
+
+meth["n_clicked"] <- ""
+
+
+meth[c("age_num", "gender_bin", "JobRole_bin", "years_org_num")] <- ""
+
+
+meth[c(
+  "optimism_bias",
+  "self_efficacy",
+  "risk_perception",
+  "locus_of_control",
+  "acceptance",
+  "negative_emotions"
+)] <- "pmm"
+
+pred <- make.predictorMatrix(dat_imp)
+pred[,] <- 1
+diag(pred) <- 0
+
+
+pred["n_clicked", ] <- 0
+
+
+
+
+set.seed(123)
+imp <- mice(
+  dat_imp,
+  m = 100,
+  method = meth,
+  predictorMatrix = pred,
+  maxit = 30
+  
+)
+
+
+zvars <- c("optimism_bias","self_efficacy","risk_perception",
+           "locus_of_control","acceptance","negative_emotions","age_num",
+           "years_org_num")
+
+fit_imp_z <- with(
+  imp,
+  {
+    d <- data.frame(n_clicked, optimism_bias, self_efficacy, risk_perception,
+                    locus_of_control, acceptance, negative_emotions,
+                    age_num, gender_bin, JobRole_bin, years_org_num)
+
+    for (v in intersect(zvars, names(d))) {
+      d[[v]] <- as.numeric(scale(d[[v]]))
+    }
+
+    glm(
+      cbind(n_clicked, 4 - n_clicked) ~
+        optimism_bias + self_efficacy + risk_perception +
+        locus_of_control + acceptance + negative_emotions +
+        age_num + gender_bin + JobRole_bin + years_org_num,
+      family = binomial(),
+      data = d
+    )
+  }
+)
+
+res_z <- pool(fit_imp_z)
+summary(res_z)
+
+
+sum_z <- summary(res_z)
+
+sum_z$OR        <- exp(sum_z$estimate)
+sum_z$OR_low95  <- exp(sum_z$estimate - 1.96 * sum_z$std.error)
+sum_z$OR_high95 <- exp(sum_z$estimate + 1.96 * sum_z$std.error)
+
+sum_z[, c("term","estimate","std.error","p.value","OR","OR_low95","OR_high95")]
+
+
+
+## ============================================================
+##  forest plot 
+## ============================================================
+
+df_plot_manual <- tibble::tribble(
+  ~Predictor, ~beta, ~SE, ~OR, ~OR_low, ~OR_high,
+  "Optimism bias",        0.49, 0.20, 1.64, 1.10, 2.43,
+  "Self-efficacy",       -0.26, 0.25, 0.77, 0.47, 1.25,
+  "Risk perception",     -0.17, 0.14, 0.85, 0.65, 1.10,
+  "Locus of control",    -0.24, 0.17, 0.79, 0.57, 1.09,
+  "Acceptance",           0.14, 0.14, 1.15, 0.87, 1.52,
+  "Negative emotions",    0.01, 0.12, 1.01, 0.79, 1.28
+) %>%
+  mutate(
+    sig = (OR_low > 1) | (OR_high < 1),
+    Predictor = factor(Predictor, levels = Predictor[order(OR, decreasing = TRUE)]))
+
+
+
+p <- ggplot(df_plot_manual, aes(x = OR, y = Predictor)) +
+  geom_vline(xintercept = 1, linetype = "dashed",
+             linewidth = 0.7, color = "grey40") +
+  geom_errorbarh(
+    aes(xmin = OR_low, xmax = OR_high),
+    height = 0.20,
+    linewidth = 0.8,
+    color = "grey30"
+  ) +
+  geom_point(
+    aes(fill = sig),
+    shape = 21,
+    size = 3.6,
+    color = "black"
+  ) +
+  scale_fill_manual(
+    values = c(`TRUE` = "black", `FALSE` = "white"),
+    guide = "none"
+  ) +
+  scale_x_log10(
+    breaks = c(0.5, 0.75, 1, 1.25, 1.5, 2, 3),
+    labels = c("0.5","0.75","1","1.25","1.5","2","3")
+  ) +
+  scale_y_discrete(limits = rev) +   
+  labs(
+    x = "Odds ratio (log scale) with 95% CI",
+    y = NULL
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.text.y  = element_text(size = 15),
+    axis.text.x  = element_text(size = 13),
+    axis.title.x = element_text(size = 14),
+    axis.line.y  = element_blank(),
+    axis.ticks.y = element_blank(),
+    plot.margin  = margin(10, 15, 10, 10)
+  )
+
+print(p)
+
+
+ggsave(
+  "forest_plot_odds_ratios.pdf",
+  plot   = p,
+  width  = 7,
+  height = 4.5,
+  units  = "in",
+  device = cairo_pdf
+)
+
+##----------------------
+##Histogram click sums and compromise probability
+##----------------------
+
+local({
+
+  library(dplyr)
+  library(tidyr)
+  library(ggplot2)
+
+ 
+
+  to_binary_present <- function(x) {
+    x <- trimws(as.character(x))
+    dplyr::case_when(
+      is.na(x) | x == "" ~ 0L,
+      x == "--"          ~ 0L,
+      TRUE               ~ 1L
+    )
+  }
+
+ 
+  to_clicked <- function(x) {
+    x <- trimws(as.character(x))
+    dplyr::case_when(
+      is.na(x) | x == "" ~ 0L,
+      x == "--"          ~ 0L,
+      TRUE               ~ 1L
+    )
+  }
+
+  
+  wilson_ci <- function(x, n, z = 1.96) {
+    if (n == 0) return(c(NA_real_, NA_real_))
+    p <- x / n
+    denom <- 1 + z^2 / n
+    center <- (p + z^2/(2*n)) / denom
+    half <- (z * sqrt((p*(1-p) + z^2/(4*n)) / n)) / denom
+    c(center - half, center + half)
+  }
+
+  ## ----------------------------
+  ## 1) Build per-person variables
+  ## ----------------------------
+
+  dat0 <- df_analysis_filt %>%
+    mutate(
+      
+      sent_sim0  = to_binary_present(`sim0_Opened_Time_c1_2023-03-29`),
+      sent_sim05 = to_binary_present(`sim0.5_Opened_Time_c2_2024-07-22`),
+      sent_sim1  = to_binary_present(sim1_SuccessfullyDeliveredEmail_TimeStamp),
+      sent_sim2  = to_binary_present(sim2_SuccessfullyDeliveredEmail_TimeStamp),
+
+      
+      clicked_sim0  = to_clicked(`sim0_Viewed Landing Page_Time_c1_2023-03-29`),
+      clicked_sim05 = to_clicked(`sim0.5_Viewed Landing Page_Time_c2_2024-07-22`),
+      clicked_sim1  = to_clicked(sim1_EmailLinkClicked_TimeStamp),
+      clicked_sim2  = to_clicked(sim2_EmailLinkClicked_TimeStamp),
+
+      
+      clicked_sim0  = clicked_sim0  * sent_sim0,
+      clicked_sim05 = clicked_sim05 * sent_sim05,
+      clicked_sim1  = clicked_sim1  * sent_sim1,
+      clicked_sim2  = clicked_sim2  * sent_sim2,
+
+     
+      compromised_sim0  = to_binary_present(`sim0_Data Entered_Time_c1_2023-03-29`),
+      compromised_sim05 = to_binary_present(`sim0.5_Data Entered_Time_c2_2024-07-22`),
+      compromised_sim1  = to_binary_present(sim1_CredSupplied_TimeStamp_Compromised),
+      compromised_sim2  = to_binary_present(sim2_CredSupplied_TimeStamp_Compromised),
+
+      
+      compromised_sim0  = compromised_sim0  * sent_sim0,
+      compromised_sim05 = compromised_sim05 * sent_sim05,
+      compromised_sim1  = compromised_sim1  * sent_sim1,
+      compromised_sim2  = compromised_sim2  * sent_sim2
+    ) %>%
+    mutate(
+      n_sent = sent_sim0 + sent_sim05 + sent_sim1 + sent_sim2,
+      n_clicked = clicked_sim0 + clicked_sim05 + clicked_sim1 + clicked_sim2,
+      n_compromised = compromised_sim0 + compromised_sim05 + compromised_sim1 + compromised_sim2,
+      any_compromise = if_else(n_compromised >= 1, "Compromised (>=1)", "Not compromised")
+    )
+
+  
+  df_cc4 <- dat0 %>%
+    filter(sent_sim0 == 1, sent_sim05 == 1, sent_sim1 == 1, sent_sim2 == 1) %>%
+    mutate(n_sent = 4L)
+
+  cat("N complete exposure (4/4):", nrow(df_cc4), "\n")
+
+library(dplyr)
+library(ggplot2)
+
+
+wilson_ci <- function(x, n, z = 1.96) {
+  if (is.na(n) || n == 0) return(c(NA_real_, NA_real_))
+  p <- x / n
+  denom <- 1 + z^2 / n
+  center <- (p + z^2/(2*n)) / denom
+  half <- (z * sqrt((p*(1-p) + z^2/(4*n)) / n)) / denom
+  c(center - half, center + half)
+}
+
+sumdat <- df_cc4 %>%
+  filter(n_clicked >= 1) %>%             
+  group_by(n_clicked) %>%
+  summarise(
+    n_people = n(),
+    clicks_total = sum(n_clicked, na.rm = TRUE),
+    comp_total   = sum(n_compromised, na.rm = TRUE),
+    rate_comp_per_click = comp_total / clicks_total,
+    ci_low  = wilson_ci(comp_total, clicks_total)[1],
+    ci_high = wilson_ci(comp_total, clicks_total)[2],
+    .groups = "drop"
+  )
+
+
+k <- max(sumdat$n_people)
+
+p <- ggplot(sumdat, aes(x = factor(n_clicked))) +
+  
+  geom_col(aes(y = n_people), fill = "grey40", color = "white") +
+
+  
+  geom_line(aes(y = rate_comp_per_click * k, group = 1), linewidth = 0.8) +
+  geom_point(aes(y = rate_comp_per_click * k), size = 3) +
+
+ 
+  geom_errorbar(
+    aes(ymin = ci_low * k, ymax = ci_high * k),
+    width = 0.10
+  ) +
+
+  scale_y_continuous(
+    name = "Number of participants",
+    sec.axis = sec_axis(~ . / k, name = "Compromise probability per click")
+  ) +
+  labs(x = "Number of phishing emails clicked (1–4)") +
+  theme_classic(base_size = 16)
+
+p
+
+ggsave(
+  "clickcount_with_compromise_per_click_overlay.pdf",
+  plot = p, width = 6, height = 4, device = cairo_pdf
+)
+
+})
+
+#####NEW
+
+library(mice)
+library(dplyr)
+
+# ------------------------------------------------------------
+# H3 donor-pool sensitivity analysis
+# ------------------------------------------------------------
+
+run_donor_sensitivity <- function(k) {
+
+  # Nur die Anzahl der PMM-Donoren wird verändert
+  imp_k <- mice(
+    dat_imp,
+    m = 100,
+    method = meth,
+    predictorMatrix = pred,
+    maxit = 30,
+    donors = k,
+    seed = 123,
+    printFlag = FALSE
+  )
+
+  # Identisches H3-Modell wie in der Hauptanalyse
+  fit_k <- with(
+    imp_k,
+    {
+      d <- data.frame(
+        n_clicked,
+        optimism_bias,
+        self_efficacy,
+        risk_perception,
+        locus_of_control,
+        acceptance,
+        negative_emotions,
+        age_num,
+        gender_bin,
+        JobRole_bin,
+        years_org_num
+      )
+
+      # Identische Standardisierung wie in der Hauptanalyse
+      for (v in intersect(zvars, names(d))) {
+        d[[v]] <- as.numeric(scale(d[[v]]))
+      }
+
+      glm(
+        cbind(n_clicked, 4 - n_clicked) ~
+          optimism_bias +
+          self_efficacy +
+          risk_perception +
+          locus_of_control +
+          acceptance +
+          negative_emotions +
+          age_num +
+          gender_bin +
+          JobRole_bin +
+          years_org_num,
+        family = binomial(),
+        data = d
+      )
+    }
+  )
+
+  # Pooling nach Rubin
+  pooled_k <- summary(pool(fit_k))
+
+  # Konfidenzintervalle und Odds Ratios
+  pooled_k |>
+    mutate(
+      donors = k,
+      critical_value = qt(.975, df),
+      CI_low  = estimate - critical_value * std.error,
+      CI_high = estimate + critical_value * std.error,
+      OR = exp(estimate),
+      OR_low95 = exp(CI_low),
+      OR_high95 = exp(CI_high)
+    )
+}
+
+# Donorpool-Größen vergleichen
+donor_results <- bind_rows(
+  lapply(c(1, 3, 5), run_donor_sensitivity)
+)
+
+# Ergebnisse für Optimism Bias
+optimism_donor_results <- donor_results |>
+  filter(term == "optimism_bias") |>
+  select(
+    donors,
+    estimate,
+    std.error,
+    statistic,
+    df,
+    p.value,
+    CI_low,
+    CI_high,
+    OR,
+    OR_low95,
+    OR_high95
+  )
+
+print(optimism_donor_results)
+
+donor_results |>
+  select(
+    donors,
+    term,
+    estimate,
+    std.error,
+    p.value,
+    CI_low,
+    CI_high
+  ) |>
+  arrange(term, donors) |>
+  tibble::as_tibble() |>
+  print(n = Inf)
+
+```
+
+
+
+
+#Post Hoc Analysis Repeat Clicker (Hierarchical Modelling)
+```{r}
+## ============================================================
+## H4: Repeat-clicker GLMM (4 time points)
+## - Outcomes (clicked_*) NOT imputed
+## - Predictors only imputed
+## ============================================================
+
+local({
+
+  View <- function(...) invisible(NULL)
+
+  library(dplyr)
+  library(tidyr)
+  library(lme4)
+  library(mice)
+  library(performance)
+
+  set.seed(123)
+
+
+  to_delivered <- function(x) {
+    x <- trimws(as.character(x))
+    dplyr::case_when(
+      is.na(x) | x == "" ~ 0L,
+      x == "--"          ~ 0L,
+      TRUE               ~ 1L
+    )
+  }
+
+  to_clicked <- function(x) {
+    x <- trimws(as.character(x))
+    dplyr::case_when(
+      is.na(x) | x == "" ~ 0L,
+      x == "--"          ~ 0L,
+      TRUE               ~ 1L
+    )
+  }
+
+  z <- function(x) as.numeric(scale(x))
+
+
+  dat0 <- df_analysis_filt
+
+
+  dat0 <- dat0 %>%
+    mutate(
+     
+      sent_sim0  = to_delivered(`sim0_Opened_Time_c1_2023-03-29`),
+      sent_sim05 = to_delivered(`sim0.5_Opened_Time_c2_2024-07-22`),
+      sent_sim1 = to_delivered(sim1_SuccessfullyDeliveredEmail_TimeStamp),
+      sent_sim2 = to_delivered(sim2_SuccessfullyDeliveredEmail_TimeStamp),
+
+
+      
+      clicked_sim0  = to_clicked(`sim0_Viewed Landing Page_Time_c1_2023-03-29`),
+      clicked_sim05 = to_clicked(`sim0.5_Viewed Landing Page_Time_c2_2024-07-22`),
+      clicked_sim1  = to_clicked(sim1_EmailLinkClicked_TimeStamp),
+      clicked_sim2  = to_clicked(sim2_EmailLinkClicked_TimeStamp),
+
+      
+      clicked_sim0  = clicked_sim0  * sent_sim0,
+      clicked_sim05 = clicked_sim05 * sent_sim05
+    )
+
+
+  dat_h4 <- dat0 %>%
+    filter(sent_sim0 == 1, sent_sim05 == 1, sent_sim1 == 1, sent_sim2 == 1)
+
+  cat("H4 base (same delivery filter as main pipeline) | N =", nrow(dat_h4), "\n")
+
+
+  want <- c(
+    "clicked_sim0","clicked_sim05","clicked_sim1","clicked_sim2",
+    "optimism_bias","risk_perception","negative_emotions","acceptance",
+    "self_efficacy","locus_of_control","feeling_attacked","per_orga_security",
+    "age_num","gender_bin","JobRole_bin","years_org_num","anonymisedEmail"
+  )
+  dat_h4 <- dat_h4[, intersect(want, names(dat_h4)), drop = FALSE]
+
+
+  if ("JobRole_bin" %in% names(dat_h4)) dat_h4$JobRole_bin <- factor(dat_h4$JobRole_bin)
+
+  if ("gender_bin" %in% names(dat_h4)) {
+    
+    x <- suppressWarnings(as.integer(as.character(dat_h4$gender_bin)))
+    x[!x %in% c(0L, 1L)] <- NA_integer_
+    dat_h4$gender_bin <- factor(x, levels = c(0, 1))
+  }
+
+
+  click_vars <- intersect(c("clicked_sim0","clicked_sim05","clicked_sim1","clicked_sim2"), names(dat_h4))
+
+  dat_h4[click_vars] <- lapply(dat_h4[click_vars], function(x) {
+    x <- suppressWarnings(as.integer(as.character(x)))
+    x[!x %in% c(0L, 1L)] <- NA_integer_
+    x
+  })
+
+  cat("Unique IDs:", dplyr::n_distinct(dat_h4$anonymisedEmail), "\n")
+
+  dat_h4 <- dat_h4 %>% filter(if_all(all_of(click_vars), ~ !is.na(.x)))
+  cat("H4 complete outcomes (all 4 cycles observed) | N =", nrow(dat_h4), "\n")
+
+
+  meth <- make.method(dat_h4)
+  pred <- make.predictorMatrix(dat_h4)
+
+
+  if ("anonymisedEmail" %in% names(dat_h4)) {
+    meth["anonymisedEmail"] <- ""
+    pred[, "anonymisedEmail"] <- 0
+    pred["anonymisedEmail", ] <- 0
+  }
+
+
+  meth[click_vars] <- ""
+  pred[, click_vars] <- 0
+
+
+  for (v in intersect(c("age_num","gender_bin","JobRole_bin","years_org_num"), names(dat_h4))) {
+    meth[v] <- ""
+  }
+
+
+  for (v in intersect(c("optimism_bias","risk_perception","negative_emotions",
+                        "acceptance","self_efficacy","locus_of_control",
+                        "feeling_attacked","per_orga_security"), names(dat_h4))) {
+    meth[v] <- "pmm"
+  }
+
+  stopifnot(identical(names(meth), colnames(dat_h4)))
+
+  imp <- mice(
+    dat_h4,
+    m = 30,
+    method = meth,
+    predictorMatrix = pred,
+    maxit = 30,
+    seed = 123
+  )
+  cat("Imputation finished (predictors only).\n")
+
+
+  fits <- vector("list", imp$m)
+  
+  icc_vals <- numeric(imp$m)
+
+
+  for (i in 1:imp$m) {
+
+    d <- complete(imp, i)
+    d$id <- factor(d$anonymisedEmail)
+
+    if ("JobRole_bin" %in% names(d)) d$JobRole_bin <- factor(d$JobRole_bin)
+
+
+    for (v in c("optimism_bias","risk_perception","negative_emotions","acceptance",
+                "self_efficacy","locus_of_control","age_num","years_org_num",
+                "feeling_attacked","per_orga_security")) {
+      if (v %in% names(d) && is.numeric(d[[v]])) d[[v]] <- z(d[[v]])
+    }
+
+    long_i <- d %>%
+      pivot_longer(
+        cols = all_of(click_vars),
+        names_to = "cycle",
+        values_to = "clicked_bin"
+      ) %>%
+      mutate(
+        cycle = factor(
+          cycle,
+          levels = c("clicked_sim0","clicked_sim05","clicked_sim1","clicked_sim2"),
+          labels = c("sim0","sim0.5","sim1","sim2")
+        ),
+        clicked_bin = as.integer(clicked_bin),
+        difficulty = case_when(
+          cycle == "sim0"   ~ 1L,
+          cycle == "sim0.5" ~ 2L,
+          cycle == "sim1"   ~ 2L,
+          cycle == "sim2"   ~ 3L
+        )
+      )
+
+    rhs <- c(
+      "difficulty",
+      intersect(
+        c("optimism_bias","risk_perception","negative_emotions","acceptance",
+          "self_efficacy","locus_of_control","feeling_attacked","per_orga_security",
+          "age_num","gender_bin","JobRole_bin","years_org_num"),
+        names(long_i)
+      )
+    )
+
+    form <- as.formula(paste("clicked_bin ~", paste(rhs, collapse = " + "), "+ (1 | id)"))
+
+    fits[[i]] <- glmer(
+      form,
+      data = long_i,
+      family = binomial("logit"),
+      control = glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 2e5))
+    )
+
+    icc_vals[i] <- performance::icc(fits[[i]])$ICC_adjusted
+
+    
+    r2_vals <- performance::r2_nakagawa(fits[[i]])
+    cat(sprintf("Imputation %d: R2_marg = %.3f, R2_cond = %.3f\n",
+                i, r2_vals$R2_marginal, r2_vals$R2_conditional))
+  }
+
+
+  betas <- lapply(fits, fixef)
+  Vlist <- lapply(fits, vcov)
+  m <- length(betas)
+
+  coef_names <- names(betas[[1]])
+  Q <- sapply(betas, function(b) setNames(b[coef_names], coef_names))
+
+  qbar <- rowMeans(Q)
+  Ubar <- Reduce("+", Vlist) / m
+  Q_centered <- sweep(Q, 1, qbar, "-")
+  B <- (Q_centered %*% t(Q_centered)) / (m - 1)
+  Tmat <- Ubar + (1 + 1/m) * B
+
+  se <- sqrt(diag(Tmat))
+  zval <- qbar / se
+  p <- 2 * pnorm(-abs(zval))
+
+  out <- data.frame(
+    term      = coef_names,
+    estimate  = qbar,
+    se        = se,
+    z         = zval,
+    p         = p,
+    OR        = exp(qbar),
+    OR_low95  = exp(qbar - 1.96 * se),
+    OR_high95 = exp(qbar + 1.96 * se),
+    stringsAsFactors = FALSE
+  ) %>%
+    mutate(
+      p_fmt = format.pval(p, digits = 3, eps = 1e-3),
+      OR_ci = sprintf("%.2f [%.2f, %.2f]", OR, OR_low95, OR_high95)
+    ) %>%
+    dplyr::select(term, estimate, se, z, p = p_fmt, OR_ci)
+
+  cat("\n--- H4 pooled fixed effects (Rubin's rules; outcomes not imputed) ---\n")
+  print(out, digits = 3)
+
+
+  assign("dat_h4", dat_h4, envir = .GlobalEnv)
+
+
+assign("icc_vals", icc_vals, envir = .GlobalEnv)
+assign("fits", fits, envir = .GlobalEnv)
+
+
+  
+})
+
+mean(icc_vals)
+sd(icc_vals)
+range(icc_vals)
+
+
+```
+
+
+
+
+#Qualitative data analysis
+```{r}
+library(ggplot2)
+
+
+library(dplyr)
+
+df_analysis_filt %>%
+  count(reasons_click, sort = TRUE)
+
+
+
+
+
+###
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+library(tibble)
+
+## -------------------
+## 1) Closed-format options
+## -------------------
+## Derived from the multi-select `reasons_click` item on the analysis sample,
+## rather than typed in. Each respondent may select several options, so these are
+## counts of respondents choosing each option, not a partition of the 67 who
+## answered. No further filter applies.
+reasons_sel <- df_analysis_filt$reasons_click
+reasons_sel <- reasons_sel[!is.na(reasons_sel) & reasons_sel != ""]
+n_reason <- function(option) sum(grepl(option, reasons_sel, fixed = TRUE))
+
+df_predef_raw <- tribble(
+  ~raw, ~n,
+  "legitimate",                                                   n_reason("thought that the e-mail was legitimate"),
+  "Other reason:",                                                n_reason("Other reason:"),
+  "I clicked on the link to find out if the e-mail was phishing", n_reason("to find out if the e-mail was phishing"),
+  "Our security system would protect me from any harm",           n_reason("security system would protect me from any harm"),
+  "I did not read the e-mail content and just clicked the link",  n_reason("did not read the e-mail content and just clicked the link")
+)
+
+cat("Closed-format reasons, respondents =", length(reasons_sel), "\n")
+print(df_predef_raw)
+
+## Fail the run rather than silently drifting from the published figure.
+stopifnot(
+  length(reasons_sel) == 67,
+  df_predef_raw$n[df_predef_raw$raw == "legitimate"] == 40,
+  df_predef_raw$n[df_predef_raw$raw == "I clicked on the link to find out if the e-mail was phishing"] == 4,
+  df_predef_raw$n[df_predef_raw$raw == "Our security system would protect me from any harm"] == 6,
+  df_predef_raw$n[df_predef_raw$raw == "I did not read the e-mail content and just clicked the link"] == 3
+)
+
+df_predef <- df_predef_raw %>%
+  mutate(raw = as.character(raw)) %>%
+  mutate(
+    reason = str_squish(raw),
+    reason = str_replace_all(reason, "\\s*:\\s*$", ""),
+    reason = case_when(
+      tolower(reason) == "legitimate" ~ "Thought email was legitimate",
+      TRUE ~ reason
+    )
+  ) %>%
+  group_by(reason) %>%
+  summarise(n = sum(n), .groups = "drop") %>%
+  filter(tolower(reason) != "other reason") %>%
+  mutate(group = "Closed-format options")
+
+## -------------------
+## 2) Open-text (Other reasons)
+## -------------------
+df_other_codes <- tibble(
+  reason = c(
+    "Situational fit",
+    "Distracted / stressed / multitasking",
+    "On mobile device",
+    "Seemed legitimate / curiosity",
+    "Did not expect phishing",
+    "Did not know how to differentiate",
+    "Not marked as external"
+  ),
+  n = c(13, 12, 3, 2, 2, 1, 1),
+  group = "Open-text (Other reasons)"
+)
+
+## -------------------
+## 3) Combine + order within facets
+## -------------------
+df_all <- bind_rows(df_predef, df_other_codes) %>%
+  mutate(
+    group = factor(group, levels = c("Closed-format options", "Open-text (Other reasons)"))
+  ) %>%
+  arrange(group, desc(n)) %>%
+  group_by(group) %>%
+  mutate(reason = factor(reason, levels = rev(unique(reason)))) %>%  # order within each facet
+  ungroup()
+
+## -------------------
+## 4) Plot (horizontal facet headers)
+## -------------------
+p_list <- ggplot(df_all, aes(x = reason, y = n)) +
+  geom_col(fill = "grey30", width = 0.75) +
+  coord_flip(clip = "off") +
+  facet_wrap(~ group, ncol = 1, scales = "free_y") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  labs(x = NULL, y = "Number of participants") +
+  theme_classic(base_size = 13) +
+  theme(
+    strip.text = element_text(size = 11, face = "bold"),
+    strip.background = element_blank(),
+    axis.text.y = element_text(size = 11),
+    plot.margin = margin(t = 10, r = 10, b = 10, l = 20)
+  )
+
+print(p_list)
+
+ggsave(
+  "self_reported_reasons_clicking_faceted.pdf",
+  plot = p_list,
+  width = 6.2,
+  height = 4.8,
+  units = "in",
+  device = cairo_pdf
+)
+ 
+
+```
+
+
+
+#Individual differences (exploratory analysis)
+
+```{r}
+df_mod <- df_analysis_filt |>
+  mutate(
+    optimism_c = optimism_bias - mean(optimism_bias, na.rm = TRUE)
+  )
+
+mod_a <- lm(
+  negative_emotions ~ level_compromised_sim1 * optimism_c +
+    age_num + gender_bin + jobrole_bin01 + years_org_num,
+  data = df_mod
+)
+summary(mod_a)$coefficients["level_compromised_sim1:optimism_c", ]
+```
+
+
+#Psychological variables as a baseline for H4
+```{r}
+library(dplyr)
+library(mice)
+library(tibble)
+
+# ------------------------------------------------------------
+# Psychologische Prädiktoren
+# ------------------------------------------------------------
+
+psych_vars <- c(
+  "optimism_bias",
+  "self_efficacy",
+  "risk_perception",
+  "locus_of_control",
+  "acceptance",
+  "negative_emotions"
+)
+
+# ------------------------------------------------------------
+# Analysedatensatz
+#
+# level_compromised_sim1 = Simulation 3
+# level_compromised_sim2 = Simulation 4
+# ------------------------------------------------------------
+
+dat_t4_adjusted <- df_analysis_filt |>
+  select(
+    level_compromised_sim2,  # Outcome: Simulation 4
+    level_compromised_sim1,  # vorheriger Compromise-Level
+    all_of(psych_vars),
+    age_num,
+    gender_bin,
+    jobrole_bin01,
+    years_org_num
+  )
+
+# Outcomes sollten vollständig beobachtet sein
+cat(
+  "Missing Simulation 4 outcome values:",
+  sum(is.na(dat_t4_adjusted$level_compromised_sim2)),
+  "\n"
+)
+
+cat(
+  "Missing Simulation 3 compromise values:",
+  sum(is.na(dat_t4_adjusted$level_compromised_sim1)),
+  "\n"
+)
+
+# ------------------------------------------------------------
+# Imputationsmethoden
+# Nur psychologische Prädiktoren werden imputiert
+# ------------------------------------------------------------
+
+meth_t4_adjusted <- make.method(dat_t4_adjusted)
+meth_t4_adjusted[] <- ""
+meth_t4_adjusted[psych_vars] <- "pmm"
+
+# ------------------------------------------------------------
+# Predictor Matrix
+#
+# Beide Compromise-Level und die Kontrollen dürfen die
+# psychologischen Variablen vorhersagen, werden aber nicht
+# selbst imputiert.
+# ------------------------------------------------------------
+
+pred_t4_adjusted <- make.predictorMatrix(dat_t4_adjusted)
+pred_t4_adjusted[,] <- 0
+pred_t4_adjusted[psych_vars, ] <- 1
+diag(pred_t4_adjusted) <- 0
+
+# ------------------------------------------------------------
+# Multiple Imputation
+# ------------------------------------------------------------
+
+imp_t4_adjusted <- mice(
+  dat_t4_adjusted,
+  m = 100,
+  maxit = 30,
+  method = meth_t4_adjusted,
+  predictorMatrix = pred_t4_adjusted,
+  donors = 5,
+  seed = 123,
+  printFlag = FALSE
+)
+
+# Prüfen, ob mice Probleme dokumentiert hat
+imp_t4_adjusted$loggedEvents
+
+# ------------------------------------------------------------
+# Multiple Regression
+#
+# AV: Compromise-Level in Simulation 4
+# UVs: sechs psychologische Faktoren
+# Kontrolle:
+#   - Compromise-Level in Simulation 3
+#   - Alter
+#   - Geschlecht
+#   - Job Role
+#   - Job Tenure
+# ------------------------------------------------------------
+
+fit_t4_adjusted <- with(
+  imp_t4_adjusted,
+  lm(
+    scale(level_compromised_sim2) ~
+      scale(level_compromised_sim1) +
+      scale(optimism_bias) +
+      scale(self_efficacy) +
+      scale(risk_perception) +
+      scale(locus_of_control) +
+      scale(acceptance) +
+      scale(negative_emotions) +
+      scale(age_num) +
+      gender_bin +
+      jobrole_bin01 +
+      scale(years_org_num)
+  )
+)
+
+# ------------------------------------------------------------
+# Rubin-Pooling
+# ------------------------------------------------------------
+
+pooled_t4_adjusted <- pool(fit_t4_adjusted)
+t4_adjusted_results <- summary(pooled_t4_adjusted)
+
+# Konfidenzintervalle
+t4_adjusted_results <- t4_adjusted_results |>
+  mutate(
+    critical_value = qt(.975, df),
+    CI_low  = estimate - critical_value * std.error,
+    CI_high = estimate + critical_value * std.error
+  )
+
+# ------------------------------------------------------------
+# Ergebnisse der sechs psychologischen Prädiktoren
+# ------------------------------------------------------------
+
+psych_results_t4_adjusted <- t4_adjusted_results |>
+  filter(grepl(
+    paste(psych_vars, collapse = "|"),
+    term
+  )) |>
+  select(
+    term,
+    estimate,
+    std.error,
+    statistic,
+    df,
+    p.value,
+    CI_low,
+    CI_high
+  ) |>
+  as_tibble()
+
+print(psych_results_t4_adjusted, n = Inf)
+
+# ------------------------------------------------------------
+# Vollständige Tabelle einschließlich vorherigem Compromise
+# und demografischen Kontrollen
+# ------------------------------------------------------------
+
+t4_adjusted_results |>
+  select(
+    term,
+    estimate,
+    std.error,
+    statistic,
+    df,
+    p.value,
+    CI_low,
+    CI_high
+  ) |>
+  as_tibble() |>
+  print(n = Inf)
+
+```
+
+
