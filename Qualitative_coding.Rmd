@@ -1,0 +1,151 @@
+---
+title: "Qualitative coding: category frequencies and inter-rater reliability"
+author: "Anonymous"
+date: "2026-09-17"
+output: html_document
+---
+
+Reproduces the two qualitative results reported in the paper's
+"self-reported reasons for clicking" paragraph, from `Qualitative_coding.xlsx`:
+
+* Cohen's kappa for the two independent coders;
+* the seven open-text category frequencies plotted in the
+  "Open-text (Other reasons)" panel of
+  `self_reported_reasons_clicking_faceted.pdf`.
+
+Both are checked against the values printed in the paper, and the document stops
+if either disagrees.
+
+```{r setup}
+library(readxl)
+library(dplyr)
+
+WORKBOOK <- "Qualitative_coding.xlsx"
+```
+
+## The coding
+
+Three free-text survey items were coded, each with its own codebook: the reasons
+for clicking given after selecting "Other" (`reasons_click_6_TEXT`), what
+participants did on the landing page (`read_content_2.2_3_TEXT`), and why they
+read the follow-up content (`content_reasons`). Two raters coded every response
+independently.
+
+`Overview` carries all three side by side, plus `all_Rater 1` / `all_Rater 2`,
+which stack the three codings into one pair of columns.
+
+```{r read}
+overview <- read_excel(WORKBOOK, sheet = "Overview")
+
+## A rating is usable when both coders assigned a category. "x" is the coders'
+## marker for a response they judged uncodable; blank means the row belongs to
+## one of the other two questions.
+usable <- function(df, c1, c2) {
+  df |>
+    transmute(rater1 = trimws(as.character(.data[[c1]])),
+              rater2 = trimws(as.character(.data[[c2]]))) |>
+    filter(!is.na(rater1), !is.na(rater2),
+           rater1 != "", rater2 != "",
+           tolower(rater1) != "x", tolower(rater2) != "x")
+}
+```
+
+## Cohen's kappa
+
+Unweighted, on the pooled coding of all three questions. This is the
+$\kappa = 0.881$ the paper reports.
+
+```{r kappa}
+cohens_kappa <- function(ratings) {
+  categories <- sort(unique(c(ratings$rater1, ratings$rater2)))
+  tab <- table(factor(ratings$rater1, levels = categories),
+               factor(ratings$rater2, levels = categories))
+  n  <- sum(tab)
+  po <- sum(diag(tab)) / n
+  pe <- sum(rowSums(tab) * colSums(tab)) / n^2
+  list(n = n, po = po, kappa = (po - pe) / (1 - pe))
+}
+
+pooled <- usable(overview, "all_Rater 1", "all_Rater 2")
+k <- cohens_kappa(pooled)
+
+cat("N ratings           =", k$n, "\n")
+cat("Observed agreement  =", round(k$po, 3), "\n")
+cat("Cohen's kappa       =", round(k$kappa, 3), "\n")
+
+stopifnot(k$n == 120, round(k$kappa, 3) == 0.881)
+```
+
+Per question, for context. The paper quotes only the pooled value, so the
+per-question figures below are not in the manuscript.
+
+```{r kappa-per-question}
+per_question <- list(
+  "reasons_click_6_TEXT"    = c("6labels_Rater 1", "6labels_Rater 2"),
+  "read_content_2.2_3_TEXT" = c("3labels_Rater 1", "3labels_Rater 2"),
+  "content_reasons"         = c("clabels_Rater 1", "clabels_Rater 2")
+)
+
+for (q in names(per_question)) {
+  cols <- per_question[[q]]
+  kq <- cohens_kappa(usable(overview, cols[1], cols[2]))
+  cat(sprintf("%-26s N = %3d  agreement = %.3f  kappa = %.3f\n",
+              q, kq$n, kq$po, kq$kappa))
+}
+```
+
+## Open-text category frequencies
+
+The codebook, including each category's number, is on the `Categories` sheet.
+
+```{r codebook}
+codebook <- read_excel(WORKBOOK, sheet = "Categories") |>
+  filter(!is.na(`category name`)) |>
+  transmute(question = question,
+            code     = as.character(`coded as`),
+            category = `category name`,
+            recorded = as.integer(frequency))
+
+## `question` is filled in only on the first row of each block.
+codebook$question <- Reduce(function(a, b) if (is.na(b)) a else b,
+                            codebook$question, accumulate = TRUE)
+
+clicking <- codebook |> filter(question == "reasons_click_6_TEXT")
+print(clicking)
+```
+
+The frequencies the paper plots are the second coder's column. The two coders
+differ on exactly one of these 34 responses (rater 1 codes it "Legitimate
+Appearance", rater 2 "Situational Fit"), and the published counts follow rater
+2, which is consistent with the paper's statement that disagreements were
+resolved by discussion.
+
+```{r frequencies}
+counts <- usable(overview, "6labels_Rater 1", "6labels_Rater 2") |>
+  count(code = rater2, name = "derived")
+
+result <- clicking |>
+  select(code, category, recorded) |>
+  left_join(counts, by = "code") |>
+  mutate(derived = ifelse(is.na(derived), 0L, derived)) |>
+  arrange(desc(derived))
+
+print(result)
+cat("Total coded responses =", sum(result$derived), "\n")
+
+stopifnot(identical(result$derived, result$recorded))
+```
+
+These are the seven bars of the paper's "Open-text (Other reasons)" panel:
+situational fit 13, distraction 12, mobile use 3, legitimate appearance 2,
+awareness 2, external email security 1, external email labelling 1.
+
+## What this document does not reproduce
+
+The four **closed-format** counts in the same figure (thought the email was
+legitimate, 39; security system would protect me, 6; clicked to check whether it
+was phishing, 4; did not read the content, 3) come from the multi-select
+`reasons_click` item in the survey data, not from this coding workbook, and the
+analysis document still carries them as literals. Reproducing them needs the
+filter that restricts the survey sample to participants who recalled falling for
+simulation 3, which is not recorded in either document.
