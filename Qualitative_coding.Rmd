@@ -5,22 +5,55 @@ date: "2026-09-17"
 output: html_document
 ---
 
-Reproduces the two qualitative results reported in the paper's
-"self-reported reasons for clicking" paragraph, from `Qualitative_coding.xlsx`:
+Reproduces the qualitative results reported in the paper's
+"self-reported reasons for clicking" paragraph (Section 4.5), from
+`Qualitative_coding.xlsx`:
 
-* Cohen's kappa for the two independent coders;
+* Cohen's kappa for the two independent coders, and the one disagreement on the
+  clicking-reasons question;
 * the seven open-text category frequencies plotted in the
-  "Open-text (Other reasons)" panel of
-  `self_reported_reasons_clicking_faceted.pdf`.
+  "Open-text (Other reasons)" panel of Figure 6 (`fig6_selfreportedreasons.pdf`).
 
 Both are checked against the values printed in the paper, and the document stops
 if either disagrees.
 
 ```{r setup}
-library(readxl)
-library(dplyr)
+suppressPackageStartupMessages({
+  library(readxl)
+  library(dplyr)
+})
 
 WORKBOOK <- "Qualitative_coding.xlsx"
+options(width = 10000)  # tables print at full width, never wrapped
+
+## run_analysis.sh writes everything this document prints to
+## results/qualitative.log, laid out like analysis.log: section() opens each
+## part with a numbered banner naming the part of the paper it supports, claim()
+## marks the value a reported number is read from, and check() records each
+## assertion as it passes. None of them touches the analysis.
+section <- local({
+  n <- 0
+  function(title, paper, note = NULL) {
+    n <<- n + 1
+    rule <- strrep("#", 80)
+    cat("\n\n", rule, "\n", sprintf("### %d. %s\n", n, title),
+        sprintf("###    Paper: %s\n", paper), sep = "")
+    if (!is.null(note)) cat(paste0("###    ", strwrap(note, 72), "\n"), sep = "")
+    cat(rule, "\n\n", sep = "")
+  }
+})
+## A claim longer than about 100 characters continues on indented lines, so
+## '>>> ' still marks where each one starts.
+claim <- function(...) {
+  lines <- strwrap(paste0(...), width = 100, prefix = "    ", initial = ">>> ")
+  lines <- gsub("([.?!])  ", "\\1 ", lines)  # strwrap doubles the space after a full stop
+  cat("\n", paste0(lines, "\n"), sep = "")
+}
+check <- function(ok, what) {
+  if (!isTRUE(ok)) stop("Does not match the paper: ", what, call. = FALSE)
+  cat("Check passed: ", what, "\n", sep = "")
+}
+show <- function(df) print(as.data.frame(df), row.names = FALSE)
 ```
 
 ## The coding
@@ -56,6 +89,10 @@ Unweighted, on the pooled coding of all three questions. This is the
 $\kappa = 0.881$ the paper reports.
 
 ```{r kappa}
+section("Inter-rater reliability, all three open-text questions pooled",
+        "Section 4.5 (Self-reported reasons for clicking)",
+        note = "Unweighted Cohen's kappa over every response both raters coded, across the three free-text items.")
+
 cohens_kappa <- function(ratings) {
   categories <- sort(unique(c(ratings$rater1, ratings$rater2)))
   tab <- table(factor(ratings$rater1, levels = categories),
@@ -69,36 +106,59 @@ cohens_kappa <- function(ratings) {
 pooled <- usable(overview, "all_Rater 1", "all_Rater 2")
 k <- cohens_kappa(pooled)
 
-cat("N ratings           =", k$n, "\n")
-cat("Observed agreement  =", round(k$po, 3), "\n")
-cat("Cohen's kappa       =", round(k$kappa, 3), "\n")
+cat(sprintf("Responses coded by both raters  %d\n", k$n))
+cat(sprintf("Observed agreement              %.3f\n", k$po))
+claim("Section 4.5: Cohen's kappa = 0.881")
+cat(sprintf("Cohen's kappa                   %.3f\n\n", k$kappa))
 
-stopifnot(k$n == 120, round(k$kappa, 3) == 0.881)
+check(k$n == 120 && round(k$kappa, 3) == 0.881,
+      "pooled kappa = 0.881 over 120 coded responses")
 ```
 
-Per question, for context. The paper quotes only the pooled value, so the
-per-question figures below are not in the manuscript.
+Per question, for context. The paper quotes only the pooled kappa; of the
+per-question figures it uses only the clicking-reasons question's single
+disagreement.
 
 ```{r kappa-per-question}
+section("Inter-rater reliability per question",
+        "Section 4.5 (one disagreement in 34 clicking-reasons responses)",
+        note = "The per-question kappas are not reported in the paper.")
+
 per_question <- list(
   "reasons_click_6_TEXT"    = c("6labels_Rater 1", "6labels_Rater 2"),
   "read_content_2.2_3_TEXT" = c("3labels_Rater 1", "3labels_Rater 2"),
   "content_reasons"         = c("clabels_Rater 1", "clabels_Rater 2")
 )
 
-for (q in names(per_question)) {
-  cols <- per_question[[q]]
-  kq <- cohens_kappa(usable(overview, cols[1], cols[2]))
-  cat(sprintf("%-26s N = %3d  agreement = %.3f  kappa = %.3f\n",
-              q, kq$n, kq$po, kq$kappa))
-}
+per_q <- bind_rows(lapply(names(per_question), function(q) {
+  r  <- usable(overview, per_question[[q]][1], per_question[[q]][2])
+  kq <- cohens_kappa(r)
+  data.frame(question = q, coded = kq$n, disagreements = sum(r$rater1 != r$rater2),
+             agreement = round(kq$po, 3), kappa = round(kq$kappa, 3))
+}))
+
+claim("Section 4.5: the raters disagreed on one of 34 clicking-reasons responses: the reasons_click_6_TEXT row")
+show(per_q)
+cat("\n")
+
+check(per_q$coded[1] == 34 && per_q$disagreements[1] == 1,
+      "one disagreement among 34 clicking-reasons responses")
 ```
 
 ## Open-text category frequencies
 
 The codebook, including each category's number, is on the `Categories` sheet.
 
-```{r codebook}
+The frequencies the paper plots are the second coder's column. The two coders
+differ on exactly one of these 34 responses (rater 1 codes it "Legitimate
+Appearance", rater 2 "Situational Fit"), and the published counts follow rater
+2, as the paper states.
+
+```{r frequencies}
+section("Open-text reasons for clicking: category counts; Figure 6",
+        "Section 4.5; Figure 6 (fig:selfreportedreasons), the 'Open-text (Other reasons)' panel",
+        note = "Counts of the second rater's codes on reasons_click_6_TEXT, beside the frequencies recorded in the coders' codebook. 'in Figure 6' is the bar's label in the paper; the two pairs of categories with equal counts are matched to their bars by name.")
+
 codebook <- read_excel(WORKBOOK, sheet = "Categories") |>
   filter(!is.na(`category name`)) |>
   transmute(question = question,
@@ -111,29 +171,43 @@ codebook$question <- Reduce(function(a, b) if (is.na(b)) a else b,
                             codebook$question, accumulate = TRUE)
 
 clicking <- codebook |> filter(question == "reasons_click_6_TEXT")
-print(clicking)
-```
 
-The frequencies the paper plots are the second coder's column. The two coders
-differ on exactly one of these 34 responses (rater 1 codes it "Legitimate
-Appearance", rater 2 "Situational Fit"), and the published counts follow rater
-2, which is consistent with the paper's statement that disagreements were
-resolved by discussion.
+ratings <- usable(overview, "6labels_Rater 1", "6labels_Rater 2")
 
-```{r frequencies}
-counts <- usable(overview, "6labels_Rater 1", "6labels_Rater 2") |>
-  count(code = rater2, name = "derived")
+cat("The one disagreement, by category:\n")
+ratings |>
+  filter(rater1 != rater2) |>
+  mutate(rater1 = clicking$category[match(rater1, clicking$code)],
+         rater2 = clicking$category[match(rater2, clicking$code)]) |>
+  rename(`rater 1` = rater1, `rater 2 (adopted)` = rater2) |>
+  show()
+cat("\n")
+
+in_figure <- c(
+  "Situational Fit"          = "Situational fit",
+  "Distraction"              = "Distracted / stressed / multitasking",
+  "Mobile Use"               = "On mobile device",
+  "Legitimate Appearance"    = "Seemed legitimate / curiosity",
+  "Awareness"                = "Did not expect phishing",
+  "External Email Security"  = "Did not know how to differentiate",
+  "External Email Labelling" = "Not marked as external"
+)
 
 result <- clicking |>
   select(code, category, recorded) |>
-  left_join(counts, by = "code") |>
-  mutate(derived = ifelse(is.na(derived), 0L, derived)) |>
+  left_join(count(ratings, code = rater2, name = "derived"), by = "code") |>
+  mutate(derived = ifelse(is.na(derived), 0L, derived),
+         `in Figure 6` = unname(in_figure[category])) |>
   arrange(desc(derived))
 
-print(result)
-cat("Total coded responses =", sum(result$derived), "\n")
+claim("Section 4.5, Figure 6: open-text counts 13 / 12 / 3 / 2 / 2 / 1 / 1: the derived column")
+show(result)
+cat(sprintf("\nTotal coded responses           %d\n\n", sum(result$derived)))
 
-stopifnot(identical(result$derived, result$recorded))
+check(identical(result$derived, result$recorded),
+      "every derived count equals the codebook's recorded frequency")
+check(identical(as.integer(result$derived), c(13L, 12L, 3L, 2L, 2L, 1L, 1L)),
+      "the counts are the paper's 13 / 12 / 3 / 2 / 2 / 1 / 1")
 ```
 
 These are the seven bars of the paper's "Open-text (Other reasons)" panel:
@@ -142,7 +216,7 @@ awareness 2, external email security 1, external email labelling 1.
 
 ## The closed-format counts live in the other document
 
-The four **closed-format** counts in the same figure (thought the e-mail was
+The four **closed-format** counts in the same figure (thought the email was
 legitimate, 40; security system would protect me, 6; clicked to check whether it
 was phishing, 4; did not read the content, 3) come from the multi-select
 `reasons_click` item in the survey data, not from this coding workbook, so

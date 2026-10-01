@@ -1,5 +1,7 @@
 # Increased and Repeated Clicking Behavior — Analysis Code and Data
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18503743.svg)](https://doi.org/10.5281/zenodo.18503743)
+
 Analysis code and data for the IEEE S&P 2027 paper on increased and repeated clicking
 behaviour across four phishing simulations in a large university.
 
@@ -23,11 +25,26 @@ docker build -t repeat-clicker .
 ./run_analysis.sh
 ```
 
-That writes `results/analysis.log` and the figures into `results/`.
+That writes into `results/`:
 
-Build takes about 40 seconds. The analysis takes about three minutes here: the baseline
-m = 30 imputation, plus the H3 robustness checks — an m = 100 imputation and three
-donor-pool variants (k = 1, 3, 5), each its own m = 100 imputation.
+| File | What it is |
+|---|---|
+| `analysis.log` | Every result the analysis prints, in numbered sections, one per part of the paper; see below |
+| `qualitative.log` | Cohen's κ and the open-text category counts, from the coders' workbook |
+| `fig2_clicktrend.pdf` | Figure 2 (`fig:clicktrend`) |
+| `fig4_click_histogram.pdf` | Figure 4 (`fig:click_histogram`) |
+| `fig5_forest_plot_h3.pdf` | Figure 5 (`fig:forest_plot_h3`) |
+| `fig6_selfreportedreasons.pdf` | Figure 6 (`fig:selfreportedreasons`) |
+| `supplementary_plots.pdf` | Every plot the analysis draws, including those not in the paper; see below |
+
+Each figure is named after its number and `\label` in the paper. Figures 1 and 3 are
+diagrams drawn by hand, and Figures 7 to 10 are screenshots of the simulated emails, so
+none of those six is generated here.
+
+Build takes about 40 seconds. The analysis takes about two minutes here: the baseline
+m = 30 imputation, plus the H3 robustness check: three m = 100 imputations, one per
+donor-pool size (k = 1, 3, 5). The k = 5 run is also the paper's m = 100 result, since
+five donors is the default the baseline uses.
 
 If you prefer to drive it yourself:
 
@@ -39,6 +56,39 @@ docker run --rm --network none -v "$PWD/results":/work -w /work repeat-clicker \
 
 `--network none` is deliberate. The image needs no network once built, and running with
 networking disabled is the simplest proof of that.
+
+### Reading `analysis.log`
+
+The log holds results only, not code. It opens with a short guide and a table of
+contents giving the line on which each section starts. Each section starts with a banner
+naming the part of the paper it supports, for example:
+
+```
+################################################################################
+### 10. H1: parallel mediation, compromise level in simulation 3 -> simulation 4
+###    Paper: Section 4.2 (RQ1, 'Preregistered analysis H1'); Table 4 (tab:H1_indirect)
+################################################################################
+```
+
+Output the paper does not use, such as the data-quality checks, is in sections marked
+`not reported`. Within a section, a line starting `>>> ` names the claim in the paper
+and which of the values printed after it the claim comes from, so searching for `>>> `
+steps through every reported value in order. In the code and the log, `sim0`, `sim0.5`,
+`sim1` and `sim2` are the paper's simulations 1 to 4.
+
+The code for any section is found by searching `Repeat_clicker_analysis_5.Rmd` for the
+section's title: each banner is printed by a `section()` call at that point.
+
+`qualitative.log` is laid out the same way, from `Qualitative_coding.Rmd`, in three
+sections of its own.
+
+### `supplementary_plots.pdf`
+
+Every plot the analysis draws, in order, one per page: the straightlining distribution
+(page 1); the variable histograms (pages 2 to 4), the training-intention scatter plots
+(page 5) and the Cook's distances (page 6) behind the assumption checks in Section 4.1.1;
+then Figures 5, 4 and 6 again. None of pages 1 to 6 is in the paper. It is what R would
+otherwise write to its default `Rplots.pdf`.
 
 ## Why it is reproducible
 
@@ -59,35 +109,46 @@ compiles from source, turning a 40-second build into roughly 45 minutes.
 
 All values below were confirmed by running the analysis in this repository.
 
-| Paper claim | Value in the paper | Where in the output |
-|---|---|---|
-| Final analysis sample | N = 986 | `N Original (df_analysis_filt): 986` |
-| Repeat-clicking subset | N = 115 | `N mit vollständigem Exposure (4/4): 115` |
-| Duplicate exclusions | 138 | `Raw duplicates (by anonymisedEmail): 138` |
-| Attention-check exclusions | 419 | `[Strict check] Excluded: 419` |
-| Click rates, simulations 1–4 | 4.5 / 17.6 / 18.0 / 33.6 % | `Click rates by simulation` |
-| Compromise rates, simulations 1–4 | 0.4 / 5.1 / 6.0 / 9.0 % | `Compromise rates by simulation` |
-| Mean age | 39.8 (SD 11.0) | `mean(df_analysis_filt$age_mean)` = 39.78, SD 10.99 |
-| H1 model fit | χ²(15) = 180.71 | lavaan `Test Statistic 180.711` |
-| H2 model fit | χ²(15) = 201.02 | lavaan `Test Statistic 201.021` |
-| H1 indirect and total effects | all eight rows of `tab:H1_indirect` | `Defined Parameters`, H1 model |
-| H2 indirect and total effects | all eight rows of `tab:H2_indirect` | `Defined Parameters`, H2 model |
-| H3, optimism bias on repeat clicking | β = .406, Wald t(30.50) = 2.20, p = .035 | pooled GLM, `sum_z` table: 0.40622, 2.2010, df 30.50, p .0354 |
-| H3 robustness, m = 100 | β = .429, p = .028 | second `sum_z` table: 0.42940, p .02838 |
-| H3 robustness, PMM donor pools 1 / 3 / 5 | β = .429–.506, p = .020–.034 | `optimism_donor_results`: .5056/.0338, .4333/.0203, .4294/.0284 |
-| H2 post hoc, training-link click | β = 0.23, z = 2.20, p = .028; age 0.35, z = 2.55, p = .011 | `glm(cybsafeLinkClicked ~ ...)`: 0.22783/2.195/.0282; 0.35253/2.549/.0108 |
-| H3 post hoc, detection difficulty | β = 0.83, z = 4.71, OR = 2.30 | `H4 pooled fixed effects`: 0.8337, 4.71, OR 2.30 |
-| H3 post hoc, variance from individual differences | ≈ 15 % | `mean(icc_vals)` = 0.1507 |
-| Qualitative, inter-rater reliability | Cohen's κ = 0.881 | `results/qualitative.log`, `Cohen's kappa` |
-| Qualitative, open-text reason counts | 13 / 12 / 3 / 2 / 2 / 1 / 1 | `results/qualitative.log`, `derived` column |
-| Closed-format reasons for clicking, respondents choosing each option (multi-select, 67 answered) | 40 / 6 / 4 / 3 | `results/analysis.log`, `Closed-format reasons, respondents = 67`, then `df_predef_raw`, `n` column, leaving out the `Other reason:` row; asserted, so a mismatch fails the run |
+Section, figure and table numbers are those of the camera-ready paper. "Log §" is the
+numbered section of `results/analysis.log`; the `>>> ` line in that section says which
+printed value each claim is read from.
 
-Figures written to `results/`, all four used in the paper:
+| Where in the paper | Claim | Value in the paper | Log § |
+|---|---|---|---|
+| Section 3.2.1 | Recorded responses; duplicate exclusions | 1625; 138 | 1 |
+| Section 3.2.1 | Attention-check exclusions | 419 | 1 |
+| Section 3.2.1 | Exposure exclusions; final analysis sample | 82; N = 986 | 1 |
+| Section 3.2.1 | Academic and non-academic staff | 455 / 531 | 6 |
+| Section 3.2.1 | Mean age | 39.8 (SD 11.0) | 6 |
+| Table 1 | Scale reliabilities (α) | .74, .69, .86, .86, .88, .671 / .832, .89 | 8 |
+| Table 3 (Appendix C) | Correlations between the seven scales | every cell | 4 |
+| Section 4.1, Figure 2 | Click rates, simulations 1–4 | 4.5 / 17.6 / 18.0 / 33.6 % | 5 and 12 |
+| Section 4.1, Figure 2 | Compromise rates, simulations 1–4 | 0.4 / 5.1 / 6.0 / 9.0 % | 5 and 12 |
+| Section 4.1.1 | Variance inflation factors; Cook's distance | all < 2; all < 1 | 9 |
+| Section 4.2 | H1 model fit | χ²(15) = 180.71 | 10 |
+| Section 4.2, Table 4 | H1 indirect and total effects, including the c-path | all eight rows; B = 0.09, p = .048 | 10 |
+| Section 4.2 | Post hoc H1, clicks | McNemar χ²(1) = 64.31; 259 vs 105 transitions | 11 |
+| Section 4.2 | Post hoc H1, compromises | McNemar χ²(1) = 6.57; 79 vs 49 transitions | 11 |
+| Section 4.3 | H2 model fit | χ²(15) = 201.02 | 13 |
+| Section 4.3, Table 5, Figure 3 | H2 indirect and total effects; path coefficients | all eight rows | 13 |
+| Section 4.3 | Training-link clicks | 67 (6.8 %) | 14 |
+| Section 4.3 | Post hoc H2, training intention; age | B = 0.23, z = 2.20, p = .028; B = 0.35, z = 2.55, p = .011 | 14 |
+| Section 4.4 | Repeat-clicking subset | N = 115 | 15 |
+| Section 4.4, Table 6 | H3, optimism bias, and every other row | β = .406, Wald t(30.50) = 2.20, p = .035 | 15 |
+| Section 4.4, Figure 5 | H3 odds ratios with 95 % intervals | as plotted | 15 |
+| Section 4.4, Figure 4 | Participants by number of clicks; compromise per click | as plotted | 16 |
+| Section 4.4 | H3 robustness, m = 100 | β = .429, p = .028 | 17 (the donors = 5 row) |
+| Section 4.4 | H3 robustness, PMM donor pools 1 / 3 / 5 | β = .429–.506, p = .020–.034 | 17 |
+| Section 4.4, Table 7 | Post hoc H3, detection difficulty, and every other row | B = 0.83, z = 4.71, OR = 2.30 | 18 |
+| Section 4.4 | Post hoc H3, variance from individual differences | ≈ 15 % | 18 |
+| Section 4.5, Figure 6 | Closed-format reasons for clicking (multi-select, 67 answered) | 40 / 6 / 4 / 3 | 19 |
+| Section 4.5 | Inter-rater reliability | Cohen's κ = 0.881 | `qualitative.log` 1 |
+| Section 4.5 | Raters' disagreements on the clicking reasons | 1 of 34 | `qualitative.log` 2 |
+| Section 4.5, Figure 6 | Open-text reason counts | 13 / 12 / 3 / 2 / 2 / 1 / 1 | `qualitative.log` 3 |
 
-- `forest_plot_odds_ratios.pdf`
-- `phishing_rates_combined_usenix.pdf`
-- `clickcount_with_compromise_per_click_overlay.pdf`
-- `self_reported_reasons_clicking_faceted.pdf`
+The closed-format counts, κ, the disagreement and the open-text counts are asserted as
+well as printed, so a mismatch fails the run; `qualitative.log` records each assertion
+as a `Check passed:` line.
 
 ## Known limitations
 
@@ -95,9 +156,6 @@ These are stated up front so readers do not have to discover them.
 
 **Some reported numbers are not computed here.** The power analysis and the four
 gender-category counts are reported in the paper but are not part of this document.
-
-**Output is part German, part English.** Some console labels and headings are in German.
-They are cosmetic and do not affect any result.
 
 ## Data statement
 
@@ -144,7 +202,7 @@ for simulation 4 had the same information. Landing pages for simulations 1 and 2
 available to the researchers.
 
 
-## Licence
+## License
 
 The code and the landing page are **MIT** (`LICENSE`); the data is **CC BY 4.0** (`LICENSE-DATA`), matching the
 existing Zenodo deposit. Creative Commons licences are not intended for software, hence
