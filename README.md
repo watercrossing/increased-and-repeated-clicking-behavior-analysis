@@ -27,7 +27,21 @@ docker build -t repeat-clicker .
 ./run_analysis.sh
 ```
 
-That writes `results/analysis.log` and the figures into `results/`.
+That writes into `results/`:
+
+| File | What it is |
+|---|---|
+| `analysis.log` | Every result the analysis prints, in numbered sections, one per part of the paper; see below |
+| `qualitative.log` | Cohen's κ and the open-text category counts, from the coders' workbook |
+| `fig2_clicktrend.pdf` | Figure 2 (`fig:clicktrend`) |
+| `fig4_click_histogram.pdf` | Figure 4 (`fig:click_histogram`) |
+| `fig5_forest_plot_h3.pdf` | Figure 5 (`fig:forest_plot_h3`) |
+| `fig6_selfreportedreasons.pdf` | Figure 6 (`fig:selfreportedreasons`) |
+| `supplementary_plots.pdf` | Every plot the analysis draws, including those not in the paper; see below |
+
+Each figure is named after its number and `\label` in the paper. Figures 1 and 3 are
+diagrams drawn by hand, and Figures 7 to 10 are screenshots of the simulated emails, so
+none of those six is generated here.
 
 Build takes about 40 seconds and the analysis about 90 seconds, so the whole thing is
 under three minutes. It is well inside the one-day budget; no scaled-down variant is
@@ -43,6 +57,41 @@ docker run --rm --network none -v "$PWD/results":/work -w /work repeat-clicker \
 
 `--network none` is deliberate. The image needs no network once built, and running with
 networking disabled is the simplest proof of that.
+
+### Reading `analysis.log`
+
+The log holds results only, not code. It opens with a short guide and a table of
+contents giving the line on which each section starts. Each section starts with a banner
+naming the part of the paper it supports, for example:
+
+```
+################################################################################
+### 10. H1: parallel mediation, compromise level in simulation 3 -> simulation 4
+###    Paper: Section 4.2 (RQ1, 'Preregistered analysis H1'); Table 4 (tab:H1_indirect)
+################################################################################
+```
+
+Output the paper does not use, such as the data-quality checks, is in sections marked
+`not reported`. Within a section, a line starting `>>> ` names the claim in the paper
+and which of the values printed after it the claim comes from, so searching for `>>> `
+steps through every reported value in order. Where the paper and the data disagree (see
+Known limitations), the `>>> ` line says so. In the code and the log, `sim0`, `sim0.5`,
+`sim1` and `sim2` are the paper's simulations 1 to 4.
+
+The code for any section is found by searching `Repeat_clicker_analysis_5.Rmd` for the
+section's title: each banner is printed by a `section()` call at that point.
+
+`qualitative.log` is laid out the same way, from `Qualitative_coding.Rmd`, in three
+sections of its own. κ and the open-text counts are asserted as well as printed, and
+each assertion is recorded as a `Check passed:` line.
+
+### `supplementary_plots.pdf`
+
+Every plot the analysis draws, in order, one per page: the straightlining distribution
+(page 1); the variable histograms (pages 2 to 4), the training-intention scatter plots
+(page 5) and the Cook's distances (page 6) behind the assumption checks in Section 4.1.1;
+then Figures 5, 4 and 6 again. None of pages 1 to 6 is in the paper. It is what R would
+otherwise write to its default `Rplots.pdf`.
 
 ## Why it is reproducible
 
@@ -65,43 +114,52 @@ This artifact reproduces the **submitted** version of the paper. This repo conta
 second branch,  **camera-ready**, which is the version we intend to publish to Zenodo
 after AE review.
 
-That distinction turns out to matter less than it sounds. Comparing the submitted and
-revised manuscripts token by token, **no reported number changed between them**. Every
-numeric difference is an addition to the revised version, in two places:
-
-- the optimism-bias sub-scale reliabilities, α = .671 for self-ratings and α = .832 for
-  peer ratings. This artifact **does** produce both, exactly.
-- a robustness paragraph for the H3 optimism-bias effect, varying the number of
-  imputations and the PMM donor pool. It was added for the revised version and is not
-  part of the submitted paper, so this branch does not reproduce it.
-
-So every figure in the table below holds for both versions of the paper.
+The two differ in their numbers. The camera-ready version adds organisational tenure as
+a control in every model, uses the compromise level as the H2 predictor as the paper
+describes, and adds robustness checks for H3, so most model statistics change. The table
+below holds for the submitted version; the `camera-ready` branch's own README maps the
+camera-ready paper.
 
 ## Mapping the paper's claims to the output
 
-All values below were confirmed by running this artifact.
+All values below were confirmed by running this artifact. Section, figure and table
+numbers are those of the submitted paper. "Log §" is the numbered section of
+`results/analysis.log`; the `>>> ` line in that section says which printed value each
+claim is read from.
 
-| Paper claim | Value in the paper | Where in the output |
-|---|---|---|
-| Final analysis sample | N = 986 | `N Original (df_analysis_filt): 986` |
-| Repeat-clicking subset | N = 115 | `N mit vollständigem Exposure (4/4): 115` |
-| Duplicate exclusions | 138 | `Raw duplicates (by anonymisedEmail): 138` |
-| Attention-check exclusions | 419 | `[Strict check] Excluded: 419` |
-| Click rates, simulations 1–4 | 4.5 / 17.6 / 18.0 / 33.6 % | `Click rates by simulation` |
-| Compromise rates, simulations 1–4 | 0.4 / 5.1 / 6.0 / 9.0 % | `Compromise rates by simulation` |
-| H3, optimism bias on repeat clicking | β = 0.42, SE = 0.18, p = .029 | pooled GLM, `sum_z` table |
-| H3 post hoc, detection difficulty | β = 0.83, z = 4.64, OR = 2.30 | `H4 pooled fixed effects` |
-| H3 post hoc, optimism bias | β = 0.26, SE = 0.19, p = .157 | `H4 pooled fixed effects` |
-| H3 post hoc, variance from individual differences | ≈ 16 % | `mean(icc_vals)` = 0.159 |
-| Qualitative, inter-rater reliability | Cohen's κ = 0.881 | `results/qualitative.log`, `Cohen's kappa` |
-| Qualitative, open-text reason counts | 13 / 12 / 3 / 2 / 2 / 1 / 1 | `results/qualitative.log`, `derived` column |
+| Where in the paper | Claim | Value in the paper | Log § |
+|---|---|---|---|
+| Section 3.2.1 | Recorded responses; duplicate exclusions | 1625; 138 | 1 |
+| Section 3.2.1 | Attention-check exclusions | 419 | 1 |
+| Section 3.2.1 | Final analysis sample | N = 986 | 1 |
+| Section 3.2.1 | Academic and non-academic staff | 455 / 531 | 6 |
+| Section 3.2.1 | Mean age | 39.3 (SD 10.4); see Known limitations | 6 |
+| Table 1 | Scale reliabilities (α) | .74, .69, .86, .86, .88; training intention see below | 8 |
+| Table 3 (Appendix D) | Correlations between the seven scales | every cell | 4 |
+| Section 4.1, Figure 2 | Click rates, simulations 1–4 | 4.5 / 17.6 / 18.0 / 33.6 % | 5 and 12 |
+| Section 4.1, Figure 2 | Compromise rates, simulations 1–4 | 0.4 / 5.1 / 6.0 / 9.0 % | 5 and 12 |
+| Section 4.1.1 | Variance inflation factors; Cook's distance | all < 2; all < 1 | 9 |
+| Section 4.2 | H1 model fit | χ²(15) = 186.06 | 10 |
+| Section 4.2, Table 4 | H1 indirect and total effects | all eight rows; total effect 0.09, z = 2.08, p = .038 | 10 |
+| Section 4.2 | Post hoc H1, clicks | McNemar χ²(1) = 64.31; 259 vs 105 transitions | 11 |
+| Section 4.2 | Post hoc H1, compromises | McNemar χ²(1) = 6.57; 79 vs 49 transitions | 11 |
+| Section 4.3 | H2 model fit | χ²(15) = 183.05 | 13 |
+| Section 4.3, Table 5, Figure 3 | H2 indirect and total effects; path coefficients | all eight rows; indirect 0.14 / 0.05 / −0.05, total indirect 0.17 | 13 |
+| Section 4.3 | Training-link clicks | 67 (6.9 %); see Known limitations | 14 |
+| Section 4.3 | Post hoc H2, training intention; age | β = 0.23, z = 2.19, p = .028; β = 0.37, z = 3.14, p = .002 | 14 |
+| Section 4.4 | Repeat-clicking subset | N = 115 | 15 |
+| Section 4.4, Table 6 | H3, optimism bias, and every other row | β = 0.42, SE = 0.18, p = .029 | 15 |
+| Section 4.4, Figure 5 | H3 odds ratios with 95 % intervals | as plotted | 15 |
+| Section 4.4, Figure 4 | Participants by number of clicks; compromise per click | as plotted | 16 |
+| Section 4.4, Table 7 | Post hoc H3, detection difficulty, and every other row | β = 0.83, z = 4.64, OR = 2.30 | 17 |
+| Section 4.4, Table 7 | Post hoc H3, optimism bias | β = 0.26, SE = 0.19, p = .157 | 17 |
+| Section 4.4 | Post hoc H3, variance from individual differences | ≈ 16 % | 17 |
+| Section 4.5, Figure 6 | Closed-format reasons for clicking (multi-select, 67 answered) | 39 / 6 / 4 / 3; see Known limitations | 18 |
+| Section 4.5 | Inter-rater reliability | Cohen's κ = 0.881 | `qualitative.log` 1 |
+| Section 4.5, Figure 6 | Open-text reason counts | 13 / 12 / 3 / 2 / 2 / 1 / 1 | `qualitative.log` 3 |
 
-Figures written to `results/`, all four used in the paper:
-
-- `forest_plot_odds_ratios.pdf`
-- `phishing_rates_combined_usenix.pdf`
-- `clickcount_with_compromise_per_click_overlay.pdf`
-- `self_reported_reasons_clicking_faceted.pdf`
+Section 4.2 quotes H1's χ² from the Standard column of the lavaan output and Section 4.3
+quotes H2's from the Scaled column; the `>>> ` lines point at the right one.
 
 ## Known limitations
 
@@ -113,7 +171,8 @@ labels in `Qualitative_coding.xlsx`, and asserts them rather than merely printin
 The four **closed-format** counts in the same figure are still literals in the analysis
 document on this branch, because this branch regenerates the submitted figure. They do
 derive from the multi-select `reasons_click` item on the analysis sample, with no further
-filter, and the camera-ready branch computes and asserts them.
+filter: section 18 of `analysis.log` prints both the literals and the derived counts, and
+the camera-ready branch computes and asserts them.
 
 **The first closed-format reason count is wrong in the submitted paper.** The figure gives
 39 participants who said they thought the e-mail was legitimate. The data gives **40**; the
@@ -139,8 +198,10 @@ be fixed in the camera-ready text. Nothing else depends on it: `age_mean` is use
 this descriptive statistic, while the models use the separate ordered `age` factor, which
 was always correct.
 
-**Output is part German, part English.** Some console labels and headings are in German.
-They are cosmetic and do not affect any result.
+**Three smaller reporting differences.** Section 3.2.1 gives 86 exposure exclusions where
+the data give 82, which `PROVENANCE.md` explains. Section 4.3 gives the 67 training-link
+clicks as 6.9 % of the sample; 67 / 986 is 6.8 %. Table 1 gives training intention
+α = .90; the analysis computes .893.
 
 ## Data statement
 
@@ -183,7 +244,7 @@ details the platform filled in for each participant (name, email address) appear
 for simulation 4 had the same information. Landing pages for simulations 1 and 2 were not 
 available to the researchers.
 
-## Licence
+## License
 
 The code and the landing page are **MIT** (`LICENSE`); the data is **CC BY 4.0** (`LICENSE-DATA`), matching the
 existing Zenodo deposit. Creative Commons licences are not intended for software, hence
