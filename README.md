@@ -2,6 +2,12 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.18503743.svg)](https://doi.org/10.5281/zenodo.18503743)
 
+> Niklas George, Ingolf Becker, Nida ul Habib Bajwa, and Sarah Y. Zheng.
+> **Right Concept, Wrong Application? Psychological Effects in Phishing Simulations Drive
+> Training Intentions and Repeat Clicking.**
+> To appear in *Proceedings of the 48th IEEE Symposium on Security and Privacy (S&P '27)*,
+> Montréal, Canada, 17–20 May 2027.
+
 Analysis code and data for the IEEE S&P 2027 paper on increased and repeated clicking
 behaviour across four phishing simulations in a large university.
 
