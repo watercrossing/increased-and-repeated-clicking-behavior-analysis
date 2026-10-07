@@ -115,6 +115,10 @@ compiles from source, turning a 40-second build into roughly 45 minutes.
 
 All values below were confirmed by running the analysis in this repository.
 
+The negative-emotions composite uses the 10 PANAS negative-affect items. The
+additional questionnaire descriptors `innocent` and `tolerant`, as well as the
+attention-check row, are not included in that composite.
+
 Section, figure and table numbers are those of the camera-ready paper. "Log §" is the
 numbered section of `results/analysis.log`; the `>>> ` line in that section says which
 printed value each claim is read from.
@@ -126,26 +130,26 @@ printed value each claim is read from.
 | Section 3.2.1 | Exposure exclusions; final analysis sample | 82; N = 986 | 1 |
 | Section 3.2.1 | Academic and non-academic staff | 455 / 531 | 6 |
 | Section 3.2.1 | Mean age | 39.8 (SD 11.0) | 6 |
-| Table 1 | Scale reliabilities (α) | .74, .69, .86, .86, .88, .671 / .832, .89 | 8 |
+| Table 1 | Scale reliabilities (α) | .74, .69, .92, .86, .88, .671 / .832, .89 | 8 |
 | Table 3 (Appendix C) | Correlations between the seven scales | every cell | 4 |
 | Section 4.1, Figure 2 | Click rates, simulations 1–4 | 4.5 / 17.6 / 18.0 / 33.6 % | 5 and 12 |
 | Section 4.1, Figure 2 | Compromise rates, simulations 1–4 | 0.4 / 5.1 / 6.0 / 9.0 % | 5 and 12 |
 | Section 4.1.1 | Variance inflation factors; Cook's distance | all < 2; all < 1 | 9 |
-| Section 4.2 | H1 model fit | χ²(15) = 180.71 | 10 |
+| Section 4.2 | H1 model fit | χ²(15) = 187.80 | 10 |
 | Section 4.2, Table 4 | H1 indirect and total effects, including the c-path | all eight rows; B = 0.09, p = .048 | 10 |
 | Section 4.2 | Post hoc H1, clicks | McNemar χ²(1) = 64.31; 259 vs 105 transitions | 11 |
 | Section 4.2 | Post hoc H1, compromises | McNemar χ²(1) = 6.57; 79 vs 49 transitions | 11 |
-| Section 4.3 | H2 model fit | χ²(15) = 201.02 | 13 |
+| Section 4.3 | H2 model fit | χ²(15) = 208.46 | 13 |
 | Section 4.3, Table 5, Figure 3 | H2 indirect and total effects; path coefficients | all eight rows | 13 |
 | Section 4.3 | Training-link clicks | 67 (6.8 %) | 14 |
 | Section 4.3 | Post hoc H2, training intention; age | B = 0.23, z = 2.20, p = .028; B = 0.35, z = 2.55, p = .011 | 14 |
 | Section 4.4 | Repeat-clicking subset | N = 115 | 15 |
-| Section 4.4, Table 6 | H3, optimism bias, and every other row | β = .406, Wald t(30.50) = 2.20, p = .035 | 15 |
+| Section 4.4, Table 6 | H3, optimism bias, and every other row | β = .446, Wald t(24.76) = 2.18, p = .039 | 15 |
 | Section 4.4, Figure 5 | H3 odds ratios with 95 % intervals | as plotted | 15 |
 | Section 4.4, Figure 4 | Participants by number of clicks; compromise per click | as plotted | 16 |
-| Section 4.4 | H3 robustness, m = 100 | β = .429, p = .028 | 17 (the donors = 5 row) |
-| Section 4.4 | H3 robustness, PMM donor pools 1 / 3 / 5 | β = .429–.506, p = .020–.034 | 17 |
-| Section 4.4, Table 7 | Post hoc H3, detection difficulty, and every other row | B = 0.83, z = 4.71, OR = 2.30 | 18 |
+| Section 4.4 | H3 robustness, m = 100 | β = .422, p = .033 | 17 (the donors = 5 row) |
+| Section 4.4 | H3 robustness, PMM donor pools 1 / 3 / 5 | β = .422–.498, p = .020–.033 | 17 |
+| Section 4.4, Table 7 | Post hoc H3, detection difficulty, and every other row | B = 0.84, z = 4.65, OR = 2.31 | 18 |
 | Section 4.4 | Post hoc H3, variance from individual differences | ≈ 15 % | 18 |
 | Section 4.5, Figure 6 | Closed-format reasons for clicking (multi-select, 67 answered) | 40 / 6 / 4 / 3 | 19 |
 | Section 4.5 | Inter-rater reliability | Cohen's κ = 0.881 | `qualitative.log` 1 |

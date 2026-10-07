@@ -160,7 +160,9 @@ if (length(dup_emails) > 0) {
       acceptance         = rowMeans(across(c(`Acceptance _1`:`Acceptance _6`,
                                              `Acceptance _8`)),
                                     na.rm = TRUE),
-      negative_emotions  = rowMeans(across(c(negative_emotions_1:negative_emotions_10,
+      negative_emotions  = rowMeans(across(c(negative_emotions_1,
+                                             negative_emotions_3:negative_emotions_7,
+                                             negative_emotions_9:negative_emotions_10,
                                              negative_emotions_12:negative_emotions_13)),
                                     na.rm = TRUE),
       training_intention = rowMeans(across(`Training intention _1`:`Training intention _5`),
@@ -468,7 +470,9 @@ df_analysis_filt <- df_analysis_filt %>%
     acceptance         = rowMeans(across(c(`Acceptance _1`:`Acceptance _6`,
                                            `Acceptance _8`)),
                                   na.rm = TRUE),
-    negative_emotions  = rowMeans(across(c(negative_emotions_1:negative_emotions_10,
+    negative_emotions  = rowMeans(across(c(negative_emotions_1,
+                                           negative_emotions_3:negative_emotions_7,
+                                           negative_emotions_9:negative_emotions_10,
                                            negative_emotions_12:negative_emotions_13)),
                                   na.rm = TRUE),
     training_intention = rowMeans(across(`Training intention _1`:`Training intention _5`),
@@ -814,7 +818,9 @@ alphas <- list(
 
   negative_emotions = psych::alpha(
     df_analysis_filt %>%
-      select(negative_emotions_1:negative_emotions_10,
+      select(negative_emotions_1,
+             negative_emotions_3:negative_emotions_7,
+             negative_emotions_9:negative_emotions_10,
              negative_emotions_12:negative_emotions_13)
   ),
 
@@ -1157,7 +1163,7 @@ fit_mediation_job <- sem(
   meanstructure = TRUE
 )
 
-claim("Section 4.2: chi^2(15) = 180.71: 'Test statistic' and 'Degrees of freedom', Standard column, under 'Model Test User Model'")
+claim("Section 4.2: chi^2(15) = 187.80: 'Test statistic' and 'Degrees of freedom', Standard column, under 'Model Test User Model'")
 claim("Table 4: the 'Defined Parameters' block at the end. ind1 to ind6 are the indirect paths via optimism bias, ",
       "risk perception, negative emotions, acceptance, self-efficacy and locus of control; B = Estimate, beta = Std.all. ",
       "Section 4.2's c-path (B = 0.09, SE = 0.04, z = 1.98, p = .048) is the 'total' row")
@@ -1464,7 +1470,7 @@ fit_H3a <- sem(
   fixed.x = FALSE
 )
 
-claim("Section 4.3: chi^2(15) = 201.02: 'Test statistic', Standard column, under 'Model Test User Model'")
+claim("Section 4.3: chi^2(15) = 208.46: 'Test statistic', Standard column, under 'Model Test User Model'")
 claim("Table 5: the 'Defined Parameters' block at the end, ind1 to ind6 in the same order as Table 4, then ind_total ",
       "and total_effect; B = Estimate, beta = Std.all. Figure 3: the a- and b-paths under 'Regressions'")
 summary(
@@ -1759,7 +1765,7 @@ fit_imp_z <- with(
 )
 
 res_z <- pool(fit_imp_z)
-claim("Section 4.4 and Table 6: the optimism_bias row, estimate .406, statistic (Wald t) 2.20, df 30.50, p .035; ",
+claim("Section 4.4 and Table 6: the optimism_bias row, estimate .446, statistic (Wald t) 2.18, df 24.76, p .039; ",
       "Table 6 gives estimate and std.error for every row")
 summary(res_z)
 
@@ -2112,8 +2118,8 @@ optimism_donor_results <- donor_results |>
     OR_high95
   )
 
-claim("Section 4.4: m = 100, beta = .429, p = .028: the donors = 5 row below")
-claim("Section 4.4: donor pools, beta = .429-.506, p = .020-.034: the estimate and p.value columns below, one row per donor-pool size")
+claim("Section 4.4: m = 100, beta = .422, p = .033: the donors = 5 row below")
+claim("Section 4.4: donor pools, beta = .422-.498, p = .020-.033: the estimate and p.value columns below, one row per donor-pool size")
 print(optimism_donor_results)
 
 donor_results |>
@@ -2387,7 +2393,7 @@ local({
     ) %>%
     dplyr::select(term, estimate, se, z, p = p_fmt, OR_ci)
 
-  claim("Table 7: estimate, se and p below. Section 4.4: difficulty B = 0.83, z = 4.71, OR = 2.30")
+  claim("Table 7: estimate, se and p below. Section 4.4: difficulty B = 0.84, z = 4.65, OR = 2.31")
   cat("\n--- H4 pooled fixed effects (Rubin's rules; outcomes not imputed) ---\n")
   print(out, digits = 3)
 
