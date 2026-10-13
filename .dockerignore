@@ -1,0 +1,4 @@
+# Data and analysis files are bind-mounted at run time, not baked into the image.
+*.xlsx
+*.Rmd
+.git

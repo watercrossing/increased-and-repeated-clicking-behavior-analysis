@@ -1,0 +1,35 @@
+Creative Commons Attribution 4.0 International (CC BY 4.0)
+
+This licence covers the study DATA in this repository:
+
+    study_data_merged.xlsx
+    Qualitative_coding.xlsx
+
+Full legal code: https://creativecommons.org/licenses/by/4.0/legalcode
+Summary:         https://creativecommons.org/licenses/by/4.0/
+
+This matches the licence under which the dataset is already published on
+Zenodo, and the paper's Open Science statement that all anonymised data are
+publicly available.
+
+The SOFTWARE in this repository is licensed separately, under the MIT licence.
+See LICENSE.
+
+Attribution
+-----------
+Cite the paper, and the Zenodo deposit by its concept DOI (the "Cite all
+versions" DOI on the Zenodo record), which always resolves to the most recent
+version.
+
+A note on responsible use
+-------------------------
+These are survey and phishing-simulation records from staff at a single
+university, collected under an approved ethics protocol and linked by hashed
+identifiers so that neither the researchers nor the institution's IT security
+team could see identifiable survey responses.
+
+Direct identifiers have been removed and free-text fields screened. Even so,
+because the population is one institution, combinations of banded age, gender
+and role should be treated as potentially identifying. Do not attempt to
+re-identify participants, and do not link these records to other datasets in
+a way that would make re-identification possible.
